@@ -1,0 +1,4 @@
+interface:
+  display_name: "xy-jianying"
+  short_description: "AI 在剪映专业版里真的动手剪横版口播：去气口、钩子、大字、字幕、美颜滤镜、封面，剪完留在草稿箱等人过目。"
+  default_prompt: "使用 $xy-jianying，帮我把桌面「视频临时文件」里这条横版口播剪了，先给我看去气口样片。"

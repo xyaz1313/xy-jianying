@@ -1,0 +1,10 @@
+# Python 3.12 · Windows · NVIDIA GPU
+faster-whisper>=1.1          # 转写（CUDA 12：pip 装 nvidia-cublas-cu12 nvidia-cudnn-cu12）
+onnxruntime-gpu>=1.20        # OCR 推理（CUDA 13 轮子：nvidia-cublas nvidia-cuda-runtime nvidia-cudnn-cu13 nvidia-cufft nvidia-curand）
+rapidocr-onnxruntime>=1.3
+uiautomation>=2.0
+opencv-python>=4.9
+numpy>=1.26
+Pillow>=10.0
+PySide6>=6.7                 # 光效层（QWebEngine）
+# 草稿生成依赖 jianying-editor-reliable（pyJianYingDraft，见 references/environment.md 的安装方法）

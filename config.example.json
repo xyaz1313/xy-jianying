@@ -1,0 +1,10 @@
+{
+  "_说明": "复制成 config.json 再改。所有个人路径只放这里，不写进代码。留空 = 自动查找。",
+  "jianying_exe": "",
+  "export_root": "D:\视频成品",
+  "inbox_dir": "",
+  "mirror_dir": "",
+  "keyword_font": "仓耳榜黑",
+  "subtitle_font": "新青年体",
+  "bgm": {"name": "", "file": "", "volume_db": -6.3}
+}

@@ -1,0 +1,133 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<style>
+  html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent}
+  svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+  .tag{position:absolute;padding:5px 11px;border:1.5px solid var(--c);border-radius:8px;background:rgba(10,12,8,.85);
+    color:var(--c);font:600 15px Consolas,"Microsoft YaHei",monospace;white-space:nowrap;box-shadow:0 0 16px var(--c);transform-origin:0 100%}
+  .cursor{position:absolute;left:0;top:0;transform-origin:0 0;filter:drop-shadow(0 0 8px var(--c))}
+  .cursor .lbl{position:absolute;left:20px;top:20px;padding:3px 9px;border-radius:999px;background:var(--c);color:#111;
+    font:700 13px "Microsoft YaHei",sans-serif;white-space:nowrap}
+  .hl{position:absolute;border:3px solid var(--c);border-radius:6px;box-shadow:0 0 22px var(--c),inset 0 0 14px var(--c)}
+  #hud{position:absolute;left:24px;top:16px;font:600 16px Consolas,monospace;letter-spacing:2px;color:rgba(255,255,255,.85);
+    text-shadow:0 0 8px #000;padding:6px 12px;border-radius:8px;background:rgba(0,0,0,.45)}
+  #hud b{color:#FF287F}
+  #stats{position:absolute;right:24px;top:16px;font:600 16px Consolas,"Microsoft YaHei",monospace;letter-spacing:1px;color:#fff;
+    text-shadow:0 0 8px #000;padding:6px 12px;border-radius:8px;background:rgba(0,0,0,.45);display:none}
+  #banner{position:absolute;left:50%;top:42%;transform:translate(-50%,-50%);padding:28px 44px;border-radius:18px;
+    background:rgba(10,10,14,.88);border:2px solid #FF287F;box-shadow:0 0 40px rgba(255,40,127,.45);color:#fff;text-align:center;
+    font:800 34px "Microsoft YaHei",sans-serif;opacity:0;white-space:nowrap}
+  #banner small{display:block;margin-top:10px;font:600 20px Consolas,"Microsoft YaHei",monospace;color:#ffd0e2}
+</style></head>
+<body>
+<svg id="fx"></svg>
+<div id="hud">AI EDIT <b>//</b> <span id="hudTxt">待命</span></div>
+<div id="stats"></div>
+<div id="banner"></div>
+<script>
+// Live overlay: Python pushes events with window.onEvent({...}); everything animates in real time.
+// Coordinates arrive in PHYSICAL screen pixels relative to the overlay window's top-left.
+const NS = 'http://www.w3.org/2000/svg';
+const fx = document.getElementById('fx');
+const dpr = () => window.devicePixelRatio || 1;
+const P = (x) => x / dpr();
+const eio = k => k < .5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2;
+const eout = k => 1 - Math.pow(1 - k, 3);
+const back = k => { const c = 1.9; return 1 + (c + 1) * Math.pow(k - 1, 3) + c * Math.pow(k - 1, 2); };
+const COLORS = ['#f5e94b', '#5cf2ff', '#ff6bd5', '#7dff8a', '#ff9f43', '#a98bff'];
+const anims = [];   // {t0, dur, step(k, now), done()}
+const cursors = {}; // agent -> {el, x, y, tx, ty}
+
+function add(el) { (el instanceof SVGElement ? fx : document.body).appendChild(el); return el; }
+function svg(tag, attrs) { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); return add(e); }
+function div(cls, html, color) { const e = document.createElement('div'); e.className = cls; e.innerHTML = html || ''; e.style.setProperty('--c', color); return add(e); }
+function run(dur, step, done) { anims.push({t0: performance.now(), dur, step, done}); }
+
+function cursor(agent, color) {
+  if (!cursors[agent]) {
+    const el = div('cursor', `<svg width="26" height="30" viewBox="0 0 26 30"><path d="M2 2 L2 24 L8 18 L12 28 L16 26 L12 17 L21 17 Z" fill="${color}" stroke="#111" stroke-width="1.5"/></svg><span class="lbl">${agent}</span>`, color);
+    cursors[agent] = {el, x: innerWidth / 2, y: innerHeight / 2, tx: innerWidth / 2, ty: innerHeight / 2};
+  }
+  return cursors[agent];
+}
+
+// ---- event types ----
+// {type:'fly', from:[x,y], to:[x,y], label, color, agent, box:[x,y,w,h], dur}
+// {type:'cursor', agent, to:[x,y], color}
+// {type:'click', at:[x,y], color}
+// {type:'status', text}
+window.onEvent = function (e) {
+  const color = e.color || COLORS[(e.agentIndex || 0) % COLORS.length];
+  if (e.type === 'status') { document.getElementById('hudTxt').textContent = e.text; return; }
+  if (e.type === 'stats') { const s = document.getElementById('stats'); s.style.display = e.text ? 'block' : 'none'; s.textContent = e.text || ''; return; }
+  if (e.type === 'banner') {
+    const b = document.getElementById('banner');
+    b.innerHTML = e.text + (e.sub ? `<small>${e.sub}</small>` : '');
+    run(450, k => { b.style.opacity = k; b.style.transform = `translate(-50%,-50%) scale(${.8 + .2 * back(k)})`; });
+    setTimeout(() => run(600, k => { b.style.opacity = 1 - k; }), (e.hold || 4) * 1000);
+    return;
+  }
+  if (e.type === 'clear') { Object.values(cursors).forEach(c => c.el.remove()); for (const k in cursors) delete cursors[k]; return; }
+  if (e.type === 'cursor') { const c = cursor(e.agent || 'Claude', color); c.tx = P(e.to[0]); c.ty = P(e.to[1]); return; }
+  if (e.type === 'click') { burst(P(e.at[0]), P(e.at[1]), color); return; }
+  if (e.type === 'fly') {
+    const [x0, y0] = [P(e.from[0]), P(e.from[1])], [x3, y3] = [P(e.to[0]), P(e.to[1])];
+    const lift = Math.min(420, Math.abs(y3 - y0) * .6 + 160);
+    const d = `M${x0},${y0} C${x0 + (x3 - x0) * .25},${Math.min(y0, y3) - lift} ${x3 - (x3 - x0) * .15},${Math.min(y0, y3) - lift * .6} ${x3},${y3}`;
+    const glow = svg('path', {d, fill: 'none', stroke: color, 'stroke-width': 9, 'stroke-linecap': 'round', opacity: .35});
+    glow.style.filter = 'blur(4px)';
+    const path = svg('path', {d, fill: 'none', stroke: color, 'stroke-width': 2.6, 'stroke-linecap': 'round'});
+    const L = path.getTotalLength();
+    [path, glow].forEach(p => { p.style.strokeDasharray = `${L} ${L}`; p.style.strokeDashoffset = L; });
+    const dots = [];
+    for (let k = 0; k < 16; k++) {
+      const c = svg('circle', {r: k === 0 ? 8 : Math.max(1.5, 6.5 - k * .35), fill: k === 0 ? '#fffbe8' : color});
+      c.style.filter = `drop-shadow(0 0 ${k === 0 ? 14 : 6}px ${color})`; dots.push(c);
+    }
+    const ag = e.agent ? cursor(e.agent, color) : null;
+    run((e.dur || 1.0) * 1000, k => {
+      const kk = eio(k);
+      [path, glow].forEach(p => p.style.strokeDashoffset = L * (1 - kk));
+      dots.forEach((c, j) => { const q = Math.max(0, kk - j * .018); const pt = path.getPointAtLength(L * q); c.setAttribute('cx', pt.x); c.setAttribute('cy', pt.y); c.style.opacity = (1 - j / 16); });
+      if (ag) { const pt = path.getPointAtLength(L * kk); ag.tx = pt.x; ag.ty = pt.y; }
+    }, () => {
+      dots.forEach(c => c.remove());
+      burst(x3, y3, color);
+      let hl = null;
+      if (e.box) { hl = div('hl', '', color); Object.assign(hl.style, {left: P(e.box[0]) - 4 + 'px', top: P(e.box[1]) - 4 + 'px', width: P(e.box[2]) + 8 + 'px', height: P(e.box[3]) + 8 + 'px'}); }
+      let tag = null;
+      if (e.label) {
+        tag = div('tag', e.label, color);
+        tag.style.left = Math.min(innerWidth - 300, x3 + 18) + 'px'; tag.style.top = Math.max(10, y3 - 54) + 'px';
+        run(350, k => { tag.style.transform = `scale(${.6 + .4 * back(k)})`; tag.style.opacity = Math.min(1, k * 3); });
+      }
+      // keep the trail a while, then fade everything (hold time keeps the screen readable while filming)
+      const hold = (e.hold || 2.5) * 1000;
+      setTimeout(() => run(700, k => { const o = 1 - k; [path, glow].forEach(p => p.style.opacity = (p === glow ? .35 : 1) * o); if (hl) hl.style.opacity = o; if (tag) tag.style.opacity = o; },
+        () => { path.remove(); glow.remove(); hl && hl.remove(); tag && tag.remove(); }), hold);
+    });
+  }
+};
+
+function burst(x, y, color) {
+  [0, 120].forEach((delay, i) => setTimeout(() => {
+    const r = svg('circle', {cx: x, cy: y, r: 4, fill: 'none', stroke: color, 'stroke-width': 3});
+    run(650, k => { r.setAttribute('r', 4 + (i ? 40 : 64) * eout(k)); r.style.opacity = 1 - k; }, () => r.remove());
+  }, delay));
+}
+
+function frame(now) {
+  for (let i = anims.length - 1; i >= 0; i--) {
+    const a = anims[i], k = Math.min(1, (now - a.t0) / a.dur);
+    a.step(k, now);
+    if (k >= 1) { anims.splice(i, 1); a.done && a.done(); }
+  }
+  for (const n in cursors) {
+    const c = cursors[n]; c.x += (c.tx - c.x) * .18; c.y += (c.ty - c.y) * .18;
+    c.el.style.transform = `translate(${c.x}px,${c.y}px)`;
+  }
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body></html>
