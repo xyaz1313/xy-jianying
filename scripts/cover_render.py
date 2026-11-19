@@ -42,6 +42,29 @@ def font_for_width(text, target_w):
     return ImageFont.truetype(director.KW_FONT, lo)
 
 
+def _draw_line(img, pos, txt, f, sw, col):
+    """v1.2 (#57): 仓耳榜黑 has overlapping glyph contours that PIL renders as pin-holes (black dots / the photo showing
+    through 「别」「许」「参」「照」). Draw the fill as a MASK, fill only SMALL enclosed holes (stroke slits and the counter
+    of 口 are far larger and stay), dilate the mask for the black stroke, then paint."""
+    import cv2
+    import numpy as np
+    m = Image.new("L", img.size, 0)
+    ImageDraw.Draw(m).text(pos, txt, font=f, fill=255)
+    a = np.array(m)
+    inv = (a < 128).astype(np.uint8)
+    n, lab, stats, _ = cv2.connectedComponentsWithStats(inv, connectivity=4)
+    small = (f.size / 18) ** 2
+    for i in range(1, n):
+        x, y, ww, hh, area = stats[i]
+        if area < small and x > 0 and y > 0 and x + ww < a.shape[1] and y + hh < a.shape[0]:
+            a[lab == i] = 255
+    st = cv2.dilate(a, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * sw + 1, 2 * sw + 1)))
+    base = np.array(img)
+    base[st > 127] = (0, 0, 0)
+    base[a > 127] = col
+    img.paste(Image.fromarray(base))
+
+
 def block(img, top, bottom, cx, cy, fill_w):
     """Two lines, same fill width, strokes touching, centred on (cx, cy)."""
     d = ImageDraw.Draw(img)
@@ -55,7 +78,7 @@ def block(img, top, bottom, cx, cy, fill_w):
     y2 = y1 + h1 + gap
     for txt, f, sw, bb, ytop, col in ((top, f1, sw1, b1, y1, PINK), (bottom, f2, sw2, b2, y2, WHITE)):
         w = bb[2] - bb[0]
-        d.text((cx - w / 2 - bb[0], ytop - bb[1]), txt, font=f, fill=col, stroke_width=sw, stroke_fill=(0, 0, 0))
+        _draw_line(img, (cx - w / 2 - bb[0], ytop - bb[1]), txt, f, sw, col)
 
 
 def cover_h(frame, top, bottom, out):

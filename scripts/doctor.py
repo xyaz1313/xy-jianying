@@ -84,6 +84,10 @@ except Exception as e:
     row("checks", "config.py", False, e)
 row("checks", "剪映专业版", bool(jy) if pe.OS != "linux" else None,
     jy or ("Linux 没有剪映：只能用导演层（样片 / 字幕 / 封面）" if pe.OS == "linux" else "没找到 — 在 config.json 填 jianying_exe"))
+_cfg_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config.json")
+row("checks", "本机配置 config.json", True if os.path.exists(_cfg_file) else None,   # v1.2 (#1): say it, don't fail
+    "已有" if os.path.exists(_cfg_file) else
+    f"没有 → 用默认值：导出到 {CFG.get('export_root') or '默认'}；镜像同步（mirror_dir）不可用。要改就复制 config.example.json")
 dr = pe.drafts_root()
 row("checks", "草稿文件夹", bool(dr and os.path.isdir(dr)) if jy else None, dr or "-")
 kw = pe.jianying_font("仓耳榜黑")

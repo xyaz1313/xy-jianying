@@ -98,9 +98,7 @@ def main():
     font = ImageFont.truetype(sys_font(), 30)
     tiles, meta = [], []
     for n, (sc, c, t, img, info) in enumerate(picked, 1):
-        # OUTPUT seeking (-ss after -i) = frame-accurate; input seeking gave a different frame than the tile
-        full = subprocess.run([str(FF), "-hide_banner", "-loglevel", "error", "-i", c, "-ss", f"{t:.3f}",
-                               "-frames:v", "1", str(out / f"cand_{n:02d}.png"), "-y"])
+        exact_frame(c, t, img, out / f"cand_{n:02d}.png")
         pil = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB)).resize((640, 360))
         d = ImageDraw.Draw(pil)
         d.rectangle([0, 0, 120, 44], fill=(0, 0, 0))
@@ -115,6 +113,26 @@ def main():
     json.dump(meta, open(out / "candidates.json", "w", encoding="utf-8"), ensure_ascii=False, indent=1)
     for m in meta:
         print(m)
+
+
+def exact_frame(clip, t, tile_bgr, dst):
+    """v1.2 (#56 #58): the full-res frame that IS the scored tile, fast.
+    Output seeking (-ss after -i) is exact but decodes from 0 -> 2–3 min per candidate on an 11-min 4K HEVC file
+    (12 candidates ≈ 30 min). Input seeking alone is fast but lands on a NEIGHBOUR frame on DJI files (the owner got a
+    blink instead of the frame he picked). So: decode a ±1.5 s window small, pick the frame that matches the tile,
+    then grab exactly that one at full size (input seek to t-3, then an exact output seek inside the window)."""
+    W, H = 320, 180
+    s0 = max(0.0, t - 3.0)
+    raw = subprocess.run([str(FF), "-hide_banner", "-loglevel", "error", "-ss", f"{s0:.3f}", "-i", clip, "-ss", f"{t - 1.5 - s0:.3f}",
+                          "-t", "3", "-map", "0:v:0", "-vf", f"scale={W}:{H}", "-f", "rawvideo", "-pix_fmt", "gray", "-"],
+                         capture_output=True).stdout
+    fr = np.frombuffer(raw, np.uint8)
+    n = len(fr) // (W * H)
+    target = cv2.resize(cv2.cvtColor(tile_bgr, cv2.COLOR_BGR2GRAY), (W, H)).astype(float)
+    k = int(np.argmin([((fr[i * W * H:(i + 1) * W * H].reshape(H, W).astype(float) - target) ** 2).mean() for i in range(n)])) if n else 45
+    fps = n / 3.0 if n else 30.0
+    subprocess.run([str(FF), "-hide_banner", "-loglevel", "error", "-y", "-ss", f"{s0:.3f}", "-i", clip,
+                    "-ss", f"{t - 1.5 - s0 + k / fps:.4f}", "-map", "0:v:0", "-frames:v", "1", str(dst)])
 
 
 if __name__ == "__main__":

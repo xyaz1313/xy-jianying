@@ -217,7 +217,7 @@ def seek(t, label=None):
         time.sleep(0.15)
     if cur != target:
         import steps
-        raise steps.Pause(f"播放头没能停到 {t:.2f}s（现在 {None if cur is None else cur / FPS:.2f}s）")
+        raise steps.Pause(f"播放头没能停到 {t:.2f}s（现在 {'读不到时间码' if cur is None else f'{cur / FPS:.2f}s'}）")
     return cur
 
 

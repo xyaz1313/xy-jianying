@@ -65,6 +65,12 @@ def to_final(pieces, sp, clip, s):
     for c, a, b, f in pieces:
         if c == clip and a <= s < b:
             return f + (s - a) / sp
+    # v1.2 (#30): whisper word times are ±0.4 s off; an anchor a hair outside a piece edge belongs to the nearest piece
+    near = [(min(abs(s - a), abs(s - b)), c, a, b, f) for c, a, b, f in pieces if c == clip]
+    if near:
+        d, c, a, b, f = min(near)
+        if d < 0.4:
+            return f + (min(max(s, a), b) - a) / sp
     return None
 
 
@@ -82,6 +88,8 @@ def anchor_time(tx, anchor, fix):
     text, idx = "", []
     for i, w in enumerate(words):
         for ch in w["w"]:
+            if ch.isspace() or ch in "，。！？,.!?、":       # v1.2 (#31): 「 AI」 (leading space) broke anchors
+                continue
             text += ch
             idx.append(i)
     for k, v in fix.items():           # same-length replacements keep the char→word index valid
@@ -92,7 +100,8 @@ def anchor_time(tx, anchor, fix):
         return []
     out = []
     while pos >= 0:
-        out.append(words[idx[pos]]["s"])
+        w0 = words[idx[pos]]
+        out.append((w0["s"] + w0["e"]) / 2)            # v1.2 (#30): midpoint (a word START can lie before the piece)
         pos = text.find(anchor, pos + 1)
     return out
 
@@ -110,14 +119,20 @@ def main():
     kfont = ImageFont.truetype(director.KW_FONT, 38)
     lfont = ImageFont.truetype(director.FONT, 18)
     last_end = -99
+    def _first_time(k):
+        ts = [to_final(pieces, sp, k["clip"], s) for s in anchor_time(S["tx"][str(k["clip"])], k["anchor"], S.get("fix", {}))]
+        ts = [t for t in ts if t is not None]
+        return ts[0] if ts else 1e9
+    S["keywords"].sort(key=_first_time)               # v1.2 (#30): time order (a moved hook is listed first)
     for k in S["keywords"]:
         times = [to_final(pieces, sp, k["clip"], s) for s in anchor_time(S["tx"][str(k["clip"])], k["anchor"], S.get("fix", {}))]
         times = [t for t in times if t is not None]
         if not times:
             print("!! anchor not in the cut:", k["anchor"]); continue
         t = max(times[0] - 0.15, 0.05)
-        if t < last_end + 0.3:                      # never overlap two keywords
-            t = last_end + 0.3
+        if t < last_end + 0.3:                      # v1.2 (#30): shorten the PREVIOUS keyword, never push this one
+            if plan:                                  # (pushing cascaded: 20 keywords ended up 2 minutes late)
+                plan[-1]["dur"] = round(max(1.5, t - 0.3 - plan[-1]["t"]), 2)
         # v0.6: a 剪映 text clip is DUR (3 s) long — it must end by the end of the video, or the timeline grows
         t = min(t, round(total - DUR - 0.01, 2))
         last_end = t + DUR
@@ -132,11 +147,13 @@ def main():
                 fb += director.faces(img)
             if shown is None or dt == 1.2:
                 shown = img
+        if k.get("faces"):                          # v1.2 (#32): manual face box when detection returns a bogus one
+            fb = [tuple(b) for b in k["faces"]]
         if person and not fb:
             # a person is on screen but the face was not detected (hand, turn, blur): assume a centred face
             fb = [(0.28, 0.0, 0.72, 0.75)]
         p = director.plan_one(k["top"], k.get("bottom") or "", fb, [shown] if shown is not None else None)
-        p.update({"t": round(t, 2), "red": k["top"], "white": k.get("bottom"), "mood": k["mood"],
+        p.update({"dur": DUR, "t": round(t, 2), "red": k["top"], "white": k.get("bottom"), "mood": k["mood"],
                   "color": COLORS[k["mood"]], "anim": k.get("anim") or ANIMS[k["mood"]]})
         plan.append(p)
         pil = Image.fromarray(cv2.cvtColor(shown, cv2.COLOR_BGR2RGB)).resize((640, 360))

@@ -3,6 +3,80 @@
 Each iteration: what changed, why (owner feedback / failure seen), how it was verified. Newest first.
 Backlog at the bottom. Any agent working on this skill appends here.
 
+## v1.2.1 (Windows) — 2026-11-20 · 关掉剪映首页「AI Ultra」广告；Windows / Mac 分两个安装包
+**Why** — the night acceptance run stopped at 「打开测试草稿」: 剪映 11.8's home page now opens with an 「AI Ultra · 立即升级」
+dialog over the draft list. `popups.py` did not know 「立即升级」, took the sidebar's small 「SVIP · 立即续费」 link for the
+ad's button, could not find a dialog around it and closed nothing. The dialog's panel is dark grey (≈28) with NO dimmed
+backdrop, so the old «first near-black run» frame finder fails too. Separately, merging Kimi's Mac v1.1.4 into one
+codebase broke a Windows step (font list did not open: 9 / 12 in the Windows acceptance) — the owner decided: **two
+packages**, Windows and Mac, each platform's live-UI code changed only by its own maintainer.
+**What** — `popups.py`: 「立即升级」 added to the CTA list (still NEVER clicked); only CTAs in the middle of the window
+count (dialogs are centred); fallback `_find_close_x`: the 「×」 itself, a compact light-grey blob up-right of the CTA
+with the shape of a cross (four corners + centre, no edge midpoints) — found at (2502, 698), closed, verified gone.
+SKILL.md: this is the Windows package; Mac = separate package.
+`beauty_all.py`: the lock-icon search used S() as if it scaled ×1.5 (S(v) == v px on the owner's 4K / 150 % screen) and
+landed in the timeline tab row (first scripted run: 1 "track" found, Ctrl+A selected nothing -> stopped safely, nothing
+applied); now tl.left + 62…86, below tabs + toolbar (tl.top + 130) -> 4 tracks found exactly.
+**Verified** (Windows, RTX, 剪映 11.8, owner's 14 s test clip) — popup closed on the live 剪映 home page;
+`tests/acceptance.py` on 「XY验收」 **12 / 12 ✓** in 4.2 min (open · overlay · geometry · seek 150 · split+undo · beauty
+我的预设1 · filter 0→14.1 s 34 · subtitles 新青年体/6/white/70 · keyword 仓耳榜黑/13/FFE600/position/90/打字机I · clone white
+· home); `beauty_all.py XY美颜 --restart` end-to-end ✓ (quit + reopen, 4 tracks locked, select-all, 我的预设1, 磨皮 23 on
+3 / 3 clips, total 371 frames unchanged, tracks unlocked). The merged Win+Mac build of the same night was 9 / 12 (font
+list) -> not shipped; Mac ships separately as Kimi's v1.1.4.
+
+## v1.2.0 — 2026-11-20 · 草稿文件为主：先剪好 → 一次写进草稿 → 剪映里只做美颜（全选一次）
+**Why** — first full sample run on a real 11:26 talking-head (owner's 「怎么用好AI」, 4K HEVC, DJI): the v1.1.1 live route
+(OCR + clicks in 剪映) broke at almost every step on a 9-minute timeline (clips a few px wide, no labels) and took 2+ h
+without finishing; reruns stacked 4 copies of the first keyword; one stray click dragged a clip (+4.8 s). The owner
+stopped it: 「我自己剪 10 分钟，你剪了两个小时」, and gave the method: edit everything first, import into 剪映 in one go,
+beauty by select-all. Earlier, his v1 review of the cut (80 分) found 12 defects by ear: swallowed last characters
+(货 / 模块 / 里 / 看), stacked self-corrections, a cough, a cut 「Respect」 sign-off. Full log: 59 items in
+`skill-workspaces/xy-jianying-workspace/iteration-2-pre-v1.2/问题记录-样板跑.md` (also in the owner's vault).
+**What**
+- **Main route = file first.** `build_full.py`: cuts + speed + volume + filter (0→end) + subtitles + every keyword (two
+  lines, colour / X / Y / 字号 / 描边 / entrance animation / duration) in ONE new draft — 2.4 s. Units: draft transform =
+  UI X / 3840, Y / 2160. 剪映 encrypts `draft_content.json` once it saves a draft → always a NEW draft, never patch.
+- **Beauty = select all** (`beauty_all.py`, the owner's idea): Shift / Ctrl+click do NOT multi-select in 剪映 11.8; lock
+  every track above the main track → click main → Ctrl+A → 画面 → 美颜美体 (多人脸模式) → 美颜预设 → unlock; checks: video-only
+  multi panel, total length, 磨皮 23 on 3 clips. ≈ 2 min instead of ~1 h clip by clip.
+- **Cut points by energy** (`cut_points.py`): out never earlier than the word end, walk to real silence, stop at the
+  valley when a new syllable starts; pauses by energy-silence (also inside long whisper words); `exact` cuts for hand-
+  verified seams. Honest status: on the sample, auto matched the hand-verified cuts on 22 / 32 points; the other 10 (glued
+  retakes, whisper off by 0.4 s) needed `listen_back.py` + `retx.py fragment` + the energy strip → `exact`.
+- **Listen back** (`listen_back.py`): transcribe the rendered preview, diff against the script → swallowed / doubled words.
+  Caveat written in the file: whisper merges repeats, drops half-cut syllables and can hallucinate a repeat — leads only.
+- **Transcript repair** (`retx.py`): words lasting > 0.45 s / char hide stutters, coughs, pauses (「统」 2.9 s); windows
+  and fragments transcribed alone. `asr.py`: one model loader for CUDA / mlx / CPU, audio passed as array (PyAV bug).
+- **Subtitles from the cut** (`subs_from_cut.py`): transcribe the rendered preview itself (timeline = draft timeline,
+  removed retakes gone); hotwords + `style.json` subtitle.**fixes** (投位→投喂, 附用→复用, work body→WorkBuddy, Cloud→Claude,
+  就是被→Respect …); ≤ 14 chars a line, 1–2 char lines folded.
+- **Export** (`export_draft.py`): title / folder / 原始 4K / MP4 / 30 read back; 剪映 11.8 does NOT create the per-title
+  folder → the script makes it, moves the mp4, copies both covers, ffprobe check. Never clicks 发布 / 开通 / 收起至首页.
+- **Covers**: `cover_frames.py` full-res candidate = the very frame of the tile (match in a ±1.5 s window) and fast (1.5 min
+  instead of ~30 min — output seeking decoded from 0; plain input seeking gave the owner a blink). `cover_render.py`:
+  仓耳榜黑's overlapping contours rendered as pin-holes → mask, fill small holes only, dilate for the stroke.
+- **visual_director**: anchors ignore spaces / punctuation (「 AI」), use the word midpoint and the nearest piece (±0.4 s),
+  keywords in time order and an overlap SHORTENS the previous one (pushing cascaded 20 keywords 2 min late), `dur` per
+  keyword, manual `faces` when detection returns a bogus giant box.
+- **Live layer fixes** (route 6′ still exists for filming): step 1 crashed when 剪映 was quit as rule 9 says
+  (`in_editor()` looked for a window); `steps.quit_jianying()`; episode hotwords; recognition wait scales with length;
+  beauty waits for the 美颜预设 row; subtitle picked by position on long timelines; `set_xy` scrolls to the exact 「位置」
+  row, reads at 2x, accepts 「X-2277」; keyword 缩放 back to 100 % (剪映 remembered 58 %); `seek` error message crashed on None;
+  `speech_cuts.snap_cut` glues only real tags (对吧 / 啊 …), never a repeat. doctor: says when config.json is missing.
+- `style.json`: standing hotwords (剪映 / Claude / 豆包 / WorkBuddy / skill / AI / Respect / 投喂 / 复用 / 反问) + `fixes`.
+- SKILL.md: new route table, rule 5 (改口 → keep the last take), rule 9 (encryption + quit), rule 10 (two failures → change
+  approach; no rerun of non-idempotent steps; unreadable length → stop). Every confirmation goes into the chat.
+**Verified** (Windows, RTX, 剪映 11.8.0, the 11:26 sample): `build_full.py` → 551.04 s / 16531 frames, 418 subtitle lines,
+25 keywords, filter 34 (same as the published 「用好AI3」); `visual_director.py` keyword times identical to the run; covers
+pixel-identical; `cover_frames.py` 4 candidates with full-res = tile; `subs_from_cut.py` 419 lines, hook + sign-off right;
+`cut_points.py` exact mode reproduces the final EDL; doctor ✓. `beauty_all.py` / `export_draft.py` are the exact sequences
+done by hand on 「用好AI3」 (beauty 3 / 3 clips 磨皮 23, export 3840×2160 30 fps 551.1 s) — not yet re-run as scripts.
+Mac: pending (new route avoids most of the Mac UI failures; beauty / export UI to be tested).
+**Backlog from this run** — auto cut points still miss ~1/3 of hard seams (try a CTC / FunASR char-level aligner, #24);
+`render_edl.py` decodes from 0 for every piece (#9) and writes a 723 MB preview (#12); per-word subtitle bold / colour
+(#23); a 1-click 「拍过程」 mode on the new route (live overlay over build_full + beauty_all); re-run `beauty_all.py` and
+`export_draft.py` end-to-end as scripts on the next video.
+
 ## v1.1.1 — 2026-11-19 · Mac 实测后：一套代码不写死坐标 + 改数值读回核对 + 一条命令验收
 **Why** — the owner's Mac test (MacBook Air, macOS 27.2, 剪映 11.8, run by 豆包 for ~12 h): install / doctor / draft /
 live smoke passed, but every "type a value" action failed and many regions missed: the live layer had Windows-150 %

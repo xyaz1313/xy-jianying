@@ -120,6 +120,30 @@ def start_jianying():
     print("popups closed:", popups.close_popups())
 
 
+def quit_jianying(timeout=8):
+    """v1.2: quit 剪映 completely (a running 剪映 never lists a draft written while it runs). A normal close only
+    hides it in the tray, so: graceful close -> wait -> force. 剪映 autosaves its open draft; never call this while
+    the owner is editing something unsaved."""
+    import subprocess
+    if not jianying_running():
+        return
+    if auto.IS_MAC:
+        subprocess.run(["osascript", "-e", 'tell application "剪映专业版" to quit'], capture_output=True)
+    else:
+        subprocess.run(["taskkill", "/IM", "JianyingPro.exe"], capture_output=True)
+    t0 = time.time()
+    while jianying_running() and time.time() - t0 < timeout:
+        time.sleep(0.5)
+    if jianying_running():
+        if auto.IS_MAC:
+            subprocess.run(["pkill", "-f", "剪映"], capture_output=True)
+        else:
+            subprocess.run(["taskkill", "/F", "/IM", "JianyingPro.exe"], capture_output=True)
+        time.sleep(2)
+    if jianying_running():
+        raise Pause("剪映退不掉：" + QUIT_HINT)
+
+
 def _draft_cards(name, region, upscale=1):
     import difflib
     short = name[:4]
@@ -207,7 +231,12 @@ def apply_beauty_preset(t, preset=None):
             return None
 
     def open_presets():
-        panel.scroll(12, down=False)                 # v1.1.1: row() scrolls the panel; 美颜预设 is at the top
+        for _ in range(4):                           # v1.2 (#40): the panel may still be loading -> scroll again
+            panel.scroll(12, down=False)             # v1.1.1: row() scrolls the panel; 美颜预设 is at the top
+            time.sleep(0.6)
+            if jy_ui.find("美颜预设", panel.PANEL):
+                break
+            time.sleep(1.0)
         jy_ui.click_text("美颜预设", panel.PANEL)
         time.sleep(1.2)
     before = None
@@ -430,7 +459,7 @@ def recognize_subtitles(words=None):
     jy_ui.click_text("开始识别", (M(0), panel.MAT[3] - S(260), M(0, True), panel.MAT[3] + S(40)))
     time.sleep(2)
     wait_for(lambda: not [h for h in jy_ui.texts((M(0), Y(600), panel.PLAYER[2], panel.MAT[3] + S(160))) if "识别中" in h[0]],
-             120, 2, "字幕识别")
+             max(120, int(30 + 0.5 * ((tl.total_frames() or 0) / tl.FPS))), 2, "字幕识别")   # v1.2 (#37): long videos
     time.sleep(1)
     tl.layout()
 
@@ -442,14 +471,25 @@ def style_subtitles(sample_t=5.0):
     xc = tl.x_of(sample_t)
     hits = [h for h in jy_ui.texts((int(xc) - S(200), r[1] + S(60), int(xc) + S(200), tl.L["track_y"] - S(45)))
             if "高清" not in h[0] and "变速" not in h[0] and ".mp4" not in h[0]]
-    if not hits:
-        raise Pause("时间线上找不到字幕轨")
     tabs = []
-    for h in sorted(hits, key=lambda h: abs(h[1] - xc))[:5]:     # subtitle clips are narrow: try the nearest few
-        jy_ui.click(h[1], h[2])
+    cands = [(h[1], h[2]) for h in sorted(hits, key=lambda h: abs(h[1] - xc))[:5]]
+    # v1.2 (#47): on a long timeline subtitle clips are a few px wide with no text -> try every track row at x(t)
+    import numpy as np
+    top = int(r[1] + S(60))
+    col = np.asarray(jy_ui.grab((int(xc) - 1, top, int(xc) + 2, int(tl.L["track_y"] - S(30))))).astype(int).mean(axis=1)
+    run = []
+    for i, c in enumerate(col):
+        if c.max() - c.min() > 40 and c.max() > 90:            # coloured clip pixels (not the dark background)
+            run.append(i)
+        elif run:
+            if len(run) >= S(12):
+                cands.append((xc, top + (run[0] + run[-1]) / 2))
+            run = []
+    for x, y in cands:
+        jy_ui.click(x, y)
         time.sleep(0.8)
         tabs = panel_tabs()
-        if "字幕" in tabs or "文本" in tabs:
+        if "字幕" in tabs:
             break
     else:
         raise Pause(f"没有选中字幕：{tabs}")
@@ -467,10 +507,22 @@ def style_subtitles(sample_t=5.0):
 
 # ---------- big keyword text ----------
 def set_xy(x=None, y=None):
-    lab, _ = panel.row("位置")
+    # v1.2: the 「位置」 row sits below 「位置大小 / 缩放 / 等比缩放」 and is often out of view; row("位置") then matched the
+    # 「位置大小」 HEADER (no numbers) -> 「位置行没读全」. Scroll until the EXACT label shows; read at 2x (tiny 0s).
+    labs = []
+    for _ in range(6):
+        labs = [h for h in jy_ui.texts(panel.PANEL) if norm(h[0]) == "位置"]
+        if labs:
+            break
+        panel.scroll(2)
+        time.sleep(0.4)
+    if not labs:
+        raise Pause("「位置」行不在面板里")
+    lab = labs[0]
 
     def band():
-        hs = [h for h in jy_ui.texts((panel.label_column()[0], int(lab[2]) - S(28), panel.PANEL[2], int(lab[2]) + S(28)))
+        hs = [h for h in jy_ui.texts((panel.label_column()[0], int(lab[2]) - S(28), panel.PANEL[2], int(lab[2]) + S(28)),
+                                     upscale=2)
               if re.fullmatch(r"[XYxy]?-?[\d.]+", norm(h[0])) and h[1] > lab[3][2] + S(40)]
         return sorted(hs, key=lambda h: h[1])
     b = band()
@@ -486,7 +538,7 @@ def set_xy(x=None, y=None):
         def ok(i=i, val=val):
             time.sleep(0.3)
             cur = band()
-            got = panel._num(cur[0 if i == 0 else -1][0]) if len(cur) >= 2 else None
+            got = panel._num(re.sub(r"^[XYxy]", "", cur[0 if i == 0 else -1][0])) if len(cur) >= 2 else None
             return got is not None and abs(got - float(val)) < 1.5
         panel.type_value(*boxes[i], val, ok, defocus=(lab[1], lab[2]), what="位置 " + "XY"[i])
 
@@ -612,10 +664,17 @@ def set_anim(name):
 
 def style_keyword(color, x, y, size=None, anim=None):
     """Full style for the FIRST keyword (font, preset, stroke are inherited by every clone)."""
+    panel.scroll(15, down=False)                       # v1.2: a scrolled panel hid the 「字体」 row
+    time.sleep(0.4)
     pick_font(KW["font"])
     panel.set_value("字号", size or KW["size"])
     preset_style(KW["preset"])
     set_color(color)
+    try:                                               # v1.2: 剪映 remembered 缩放 58 % for new text -> keywords half size
+        if panel._num(str(panel.get_value("缩放"))) != 100:
+            panel.set_value("缩放", 100)
+    except LookupError:
+        pass
     set_xy(x, y)
     panel.scroll(8)
     stroke_width(KW["stroke"])

@@ -57,8 +57,10 @@ def snap_cut(segs, pcm, a, b):
             a = x["start"]
         if x["start"] + 0.05 < b < x["end"]:
             b = x["end"]
+    TAGS = ("对吧", "对不对", "啊", "嘛", "呢", "好吧", "是吧", "吧")      # v1.2 (#16): it glued the first 「第三」 of 「第三 第三」
     for x in segs:
-        if 0 <= x["start"] - b < 0.15 and x["end"] - x["start"] <= 1.0:
+        t = x.get("text", "").strip("，。！？,.!? ")
+        if 0 <= x["start"] - b < 0.15 and x["end"] - x["start"] <= 1.0 and t in TAGS:
             b = x["end"]
     a = quiet(pcm, a - 0.4, a + 0.05)
     b = quiet(pcm, b - 0.05, b + 0.45)

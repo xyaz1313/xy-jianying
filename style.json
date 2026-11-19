@@ -34,8 +34,10 @@
 
   "subtitle": {
     "_说明": "字幕：剪映「一键识别」+ 自定义热词，识别后统一改样式",
-    "hotwords": ["私域", "牢饭", "纯扯", "割韭菜", "会销"],
-    "_hotwords": "剪映会把这些词识别对；按你的视频内容改",
+    "hotwords": ["剪映", "Claude", "豆包", "WorkBuddy", "skill", "AI", "Respect", "投喂", "复用", "反问", "私域", "牢饭", "纯扯", "割韭菜", "会销"],
+    "_hotwords": "常驻热词（转写提示 + 剪映一键识别都用）；每期专有的词放 job.json 的 hotwords / subs_from_cut.py --hotwords。Respect 是小爷的结尾，whisper 会听成「就是被」",
+    "fixes": [["work bud dy", "WorkBuddy"], ["work buddy", "WorkBuddy"], ["work body", "WorkBuddy"], ["work party", "WorkBuddy"], ["workbody", "WorkBuddy"], ["Cloud", "Claude"], ["投位", "投喂"], ["头位", "投喂"], ["附用", "复用"], ["访问", "反问"], ["剪印", "剪映"], ["剪影", "剪映"], ["肢体", "字体"], ["观影", "光影"], ["人画", "人话"], ["换灯片", "幻灯片"], ["skip", "skill"], ["就是被", "Respect"], ["就一起背", "Respect"], ["respect", "Respect"]],
+    "_fixes": "字幕里 whisper 常听错的词 → 改成什么（subs_from_cut.py 用；2026-11-19 样板跑总结）。按你的口音和常用词加",
     "font": "新青年体",
     "_font": "要先加进剪映字体的「收藏」（找不到时会用字体列表的搜索框）",
     "size": 6,

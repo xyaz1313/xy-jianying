@@ -100,7 +100,7 @@ def main():
             # So: go to the home page first; the build happens with no draft open; open_draft then checks the card.
             if len(J["draft"]) > 5:
                 raise Pause(f"草稿名「{J['draft']}」太长（首页会截断）：用 5 个字以内的唯一名字")
-            if steps.in_editor():
+            if steps.jianying_running() and steps.in_editor():   # v1.2 (#39): 剪映 quit (rule 9) = no window
                 steps.go_home()
             lay_p = str(state_p.with_suffix(".layout.json"))
             if J.get("builder") == "demo":           # v0.8 process-demo: approved timeline + visual plan
@@ -191,7 +191,7 @@ def main():
             step = 6
         if step <= 5:
             status("05 字幕 · 一键识别")
-            steps.recognize_subtitles()
+            steps.recognize_subtitles(J.get("hotwords"))     # v1.2 (#36): this episode's hotwords
             status(f"05 字幕 · {ST['subtitle']['font']} 白字黑边")
             steps.style_subtitles(5.0)
             if J.get("builder") == "demo":          # owner rule: 导流 words may be SPOKEN, never shown
