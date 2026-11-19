@@ -5,7 +5,7 @@ license: CC-BY-NC-4.0（完整条款见 LICENSE；商用须经作者书面授权
 compatibility: Windows 10/11（NVIDIA 满配，在 RTX 5070 Ti 验证；无 N 卡走核显 / CPU，在 AMD 核显验证）· macOS 13+（苹果芯片，Metal / VideoToolbox）· Linux（仅导演层，没有剪映）；剪映专业版（国内版，Windows 在 11.8 验证）；Python 3.10+（推荐 3.12）+ FFmpeg；Agent 需能在本机执行命令（Claude Code、Codex、WorkBuddy、豆包、Kimi Code 等）。只做横版 16:9。
 metadata:
   slug: xy-jianying
-  version: 1.1.1
+  version: 1.1.4
   displayName: 剪映自动剪辑
   display_name: "剪映自动剪辑"
   display_name_en: "JianYing Auto Edit"
@@ -16,7 +16,7 @@ metadata:
   homepage: "https://github.com/xyaz1313/xyskill"
 ---
 
-# xy-jianying：剪映自动剪辑（v1.1.1）
+# xy-jianying：剪映自动剪辑（v1.1.4）
 
 ## 开场自报家门
 本 skill 被调用后，回复的第一行固定是：**【剪映自动剪辑 xy-jianying】AI 在剪映里真的帮你把横版口播剪完，留在草稿箱等你过目。** 之后再进入正式流程。
@@ -33,7 +33,6 @@ metadata:
 ## 第 0 步：体检（每台新电脑、每次出问题先跑）
 - Windows：`python -X utf8 scripts/doctor.py`　· Mac / Linux：`bash run.sh doctor.py`（**Mac/Linux 所有脚本都用 `bash run.sh <脚本名> 参数`**，它用 install.sh 建的 `.venv`）
 - 加 `--full` 实测编码 / 转写 / OCR / 光效层；加 `--ui` 探测剪映界面（只读）。报告在 `doctor-report/<时间>/report.md`。
-- v1.1.1：**Windows 已验证稳定；Mac 的实时操作剪映还在测试中**（Mac 上遇到失败如实告诉用户，不要硬改代码）。
 - 把它报的**档位**原样告诉用户：满配（Win+N 卡）/ 标准（Win 无 N 卡，转写慢几倍）/ Mac / 仅导演（Linux 或没装剪映：做到样片、字幕、封面为止，跳过第 5、6 步）。
 - 有 ✗ 就先按提示修（缺包、Mac 权限……），修不好就停下来把 report.md 给用户看，不要硬跑。
 - Mac 上快捷键里的 `{Ctrl}` 自动变成 ⌘；光效层紧急关闭是 ⌃⌥F12（笔记本 fn+⌃⌥F12），不行就 ⌘⌥Esc 强制退出 Python。

@@ -104,7 +104,7 @@ python adu-motion-video/scripts/pipeline.py doctor
 |---|---|---|---|
 | 满配 | Windows + NVIDIA | faster-whisper large-v3 CUDA fp16 · NVENC/NVDEC · OCR CUDA | RTX 5070 Ti：2 分钟口播 4 s；10 s 1080p 编码 0.8 s |
 | 标准 | Windows 无 N 卡 | faster-whisper large-v3-turbo CPU int8 · AMF（AMD）/ QSV（Intel）/ libx264 · OCR CPU | Ryzen 7 9800X3D + AMD 核显（`XY_BACKEND=amd`）：2 分钟口播 16 s；编码 1.0 s；OCR 0.9 s |
-| Mac | macOS 13+ 苹果芯片 | mlx-whisper large-v3-turbo（Metal）· VideoToolbox · OCR CPU · Quartz 点击 / 键盘（`scripts/osctl.py`）· 光效层 PySide6 | 待 M5 实测（`MAC-TEST.md`） |
+| Mac | macOS 13+ 苹果芯片 | mlx-whisper large-v3-turbo（Metal）· VideoToolbox · OCR CPU · Quartz 点击 / 键盘 + 原生 Accessibility 控件读回 · 光效层 PySide6 | MacBook Air / 剪映 11.8：37 项回归 + 12/12 真机验收通过（2026-11-19） |
 | 仅导演 | Linux / 没装剪映 | CPU / CUDA；剪映步骤跳过 | — |
 
 - Mac 没有 Windows 的 UI 自动化树：播放器 / 时间线全部靠 OCR 定位（`panel._player_by_ocr`）。在 Windows 上关掉 UIA 模拟过：和 UIA 结果相差 ≤ 11 px，时间线、时间尺校准完全一致。

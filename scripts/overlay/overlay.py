@@ -18,6 +18,9 @@ SAFETY (v0.7, after the owner's PC was locked behind a black always-on-top overl
   - the owner presses Ctrl+Alt+F12 (global hotkey; works even when the overlay is black and nothing else reacts)
 """
 import ctypes  # Windows hotkey hook only
+import os as _os
+# v1.1.3: stop Qt from turning this script into a foreground app on Mac (it activates itself on launch)
+_os.environ.setdefault("QT_MAC_DISABLE_FOREGROUND_APPLICATION_TRANSFORM", "1")
 import os
 import json
 import pathlib
@@ -128,6 +131,11 @@ class Bridge(QObject):
     visible = Signal(bool)
 
 
+def raise_overlay(overlay):
+    if not osctl.IS_MAC:
+        overlay.raise_()
+
+
 class Overlay(QWebEngineView):
     def __init__(self, bridge: Bridge, parent_pid=None):
         super().__init__()
@@ -218,7 +226,15 @@ class Overlay(QWebEngineView):
             return
         if not self.isVisible():
             self.show()
-        self.raise_()
+        raise_overlay(self)
+        if osctl.IS_MAC:
+            try:                                    # v1.1.3: if we ever became the active app, hand it back
+                from AppKit import NSApp
+                if NSApp.isActive():
+                    NSApp.deactivate()
+                    print('mac: overlay was the active app -> deactivated', flush=True)
+            except Exception:
+                pass
 
     def push(self, payload: str):
         self.last_event = time.time()
@@ -260,6 +276,14 @@ def serve(bridge: Bridge):
 if __name__ == "__main__":
     osctl.dpi_aware()
     app = QApplication(sys.argv)
+    if osctl.IS_MAC:
+        # v1.1.2: an accessory app never becomes the frontmost app, so it can never steal 剪映's keyboard focus
+        # (v1.1.1 Mac test: menu bar said 'Python' -> every ← → Home went to the overlay, the playhead never moved)
+        try:
+            from AppKit import NSApplication
+            NSApplication.sharedApplication().setActivationPolicy_(1)   # NSApplicationActivationPolicyAccessory
+        except Exception as e:
+            print('mac: activation policy failed:', e, flush=True)
     bridge = Bridge()
     ppid = int(sys.argv[sys.argv.index("--parent") + 1]) if "--parent" in sys.argv else None
     ov = Overlay(bridge, ppid)

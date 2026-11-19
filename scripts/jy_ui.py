@@ -207,12 +207,27 @@ def _is_black(im):
     return a.mean() < 12 and np.median(a) < 2
 
 
+def _quartz_screen():
+    import Quartz
+    from PIL import Image
+    cg = Quartz.CGWindowListCreateImage(
+        Quartz.CGDisplayBounds(Quartz.CGMainDisplayID()),
+        Quartz.kCGWindowListOptionOnScreenOnly,
+        Quartz.kCGNullWindowID,
+        Quartz.kCGWindowImageDefault,
+    )
+    if cg is None:
+        raise RuntimeError("Quartz 抓屏失败：请检查屏幕录制权限")
+    w, h = Quartz.CGImageGetWidth(cg), Quartz.CGImageGetHeight(cg)
+    data = Quartz.CGDataProviderCopyData(Quartz.CGImageGetDataProvider(cg))
+    return Image.frombytes("RGBA", (w, h), bytes(data), "raw", "BGRA",
+                           Quartz.CGImageGetBytesPerRow(cg), 1).convert("RGB")
+
+
 def _screen():
-    """Whole screen in physical pixels. Mac: main display at Retina resolution (needs Screen Recording permission)."""
-    # v1.1.1: the MAIN screen only (Windows used all_screens: with an extended screen left of / above the main one
-    # the image origin moved and every crop was off — 剪映 on the extended screen looked "black")
+    """Whole screen in physical pixels. Mac uses Quartz directly, without spawning screencapture."""
     if IS_MAC:
-        return ImageGrab.grab().convert("RGB")
+        return _quartz_screen()
     return ImageGrab.grab()
 
 
@@ -265,6 +280,12 @@ def click(x, y, agent=None, label=None, wait=0.35):
 
 
 def click_text(text, region=None, exact=False, nth=0, **kw):
+    if IS_MAC:
+        import panel
+        native = panel._native_tab_hit(text)
+        if native:
+            click(native[1], native[2], **kw)
+            return native
     hits = find(text, region, exact)
     if len(hits) <= nth:
         raise LookupError(f"'{text}' not found on screen")

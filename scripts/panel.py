@@ -40,6 +40,112 @@ def Y(v):
 RIGHT_TABS = ("画面", "音频", "变速", "动画", "调节", "基础", "草稿参数", "文本", "朗读", "AI效果", "字幕", "跟踪", "数字人")
 
 
+_NATIVE_TAB_IDS = {
+    "text_submit": "字幕", "text_text": "文本", "text_animation": "动画",
+    "text_tracking": "跟踪", "text_tts": "朗读", "text_digital_human": "数字人",
+    "video_screen": "画面", "video_audio": "音频", "video_speed": "变速",
+    "video_animation": "动画", "video_adjust": "调节",
+    "TextEditSettingPanelFont": "字体",
+}
+
+
+def _native_tab_name(value):
+    if value in set(RIGHT_TABS) | {"美颜美体", "入场", "抠像", "美颜预设"}:
+        return value
+    if isinstance(value, str) and "beauty" in value.lower() and "preset" in value.lower():
+        return "美颜预设"
+    if isinstance(value, str):
+        for prefix in ("VESettingPanelSubTabControl:", "VETreeMainCellItem:", "VETreeSubCellItem:", "root_"):
+            if value.startswith(prefix):
+                return value[len(prefix):]
+    return _NATIVE_TAB_IDS.get(value)
+
+
+def native_tabs():
+    if not auto.IS_MAC:
+        return []
+    try:
+        from ApplicationServices import AXUIElementCopyAttributeValue, AXUIElementCreateApplication
+        app = AXUIElementCreateApplication(jy_ui.win().ProcessId)
+        stack, out = [app], []
+        while stack:
+            el = stack.pop()
+            for attr in ("AXValue", "AXDescription", "AXTitle"):
+                err, value = AXUIElementCopyAttributeValue(el, attr, None)
+                name = _native_tab_name(value) if not err else None
+                if name and name not in out:
+                    out.append(name)
+            err, children = AXUIElementCopyAttributeValue(el, "AXChildren", None)
+            if not err:
+                stack.extend(children or [])
+        return out
+    except Exception:
+        return []
+
+
+def _native_tab_hit(name):
+    try:
+        from ApplicationServices import AXUIElementCopyAttributeValue, AXUIElementCreateApplication
+        app = AXUIElementCreateApplication(jy_ui.win().ProcessId)
+        stack = [app]
+        while stack:
+            el = stack.pop()
+            for attr in ("AXValue", "AXDescription", "AXTitle"):
+                err, value = AXUIElementCopyAttributeValue(el, attr, None)
+                if not err and _native_tab_name(value) == name:
+                    err, frame = AXUIElementCopyAttributeValue(el, "AXFrame", None)
+                    m = re.search(r"x:([\d.-]+) y:([\d.-]+) w:([\d.-]+) h:([\d.-]+)", str(frame))
+                    if m:
+                        x, y, w, h = map(float, m.groups())
+                        scale = auto.ui_scale()
+                        return (name, (x + w / 2) * scale, (y + h / 2) * scale,
+                                (x * scale, y * scale, (x + w) * scale, (y + h) * scale), 1.0)
+            err, children = AXUIElementCopyAttributeValue(el, "AXChildren", None)
+            if not err:
+                stack.extend(children or [])
+    except Exception:
+        pass
+    return None
+
+
+def _native_number_hit(label_y):
+    if not auto.IS_MAC:
+        return None
+    try:
+        from ApplicationServices import AXUIElementCopyAttributeValue, AXUIElementCreateApplication
+
+        def get(el, name):
+            err, value = AXUIElementCopyAttributeValue(el, name, None)
+            return None if err else value
+
+        def frame(el):
+            m = re.search(r"x:([\d.-]+) y:([\d.-]+) w:([\d.-]+) h:([\d.-]+)", str(get(el, "AXFrame")))
+            return tuple(map(float, m.groups())) if m else None
+
+        app = AXUIElementCreateApplication(jy_ui.win().ProcessId)
+        stack, sliders = [app], []
+        while stack:
+            el = stack.pop()
+            if get(el, "AXDescription") == "slider" and frame(el):
+                sliders.append(el)
+            stack.extend(get(el, "AXChildren") or [])
+        scale = auto.ui_scale()
+        sliders.sort(key=lambda el: abs((frame(el)[1] + frame(el)[3] / 2) * scale - label_y))
+        for slider in sliders:
+            sf = frame(slider)
+            if abs((sf[1] + sf[3] / 2) * scale - label_y) > S(100):
+                continue
+            parent = get(slider, "AXParent")
+            children = list(get(parent, "AXChildren") or [])
+            i = children.index(slider)
+            if i + 1 < len(children) and frame(children[i + 1]):
+                x, y, w, h = frame(children[i + 1])
+                return ((x + w / 2) * scale, (y + h / 2) * scale)
+    except Exception:
+        pass
+    return None
+
+
 def norm(s):
     return s.replace(" ", "")
 
@@ -74,7 +180,7 @@ def geom():
         r = ed.BoundingRectangle
         PLAYER = (r.left, r.top, r.right, r.bottom)
     else:
-        PLAYER = _player_by_ocr(wr)          # Mac (no UIA tree) or a 剪映 build that hides the id
+        PLAYER = _player_by_ocr(wr)          # Mac geometry uses OCR; supported controls use native AX elsewhere
     r = _Rect(*PLAYER)
     PANEL = (r.right + S(10), Y(50), wr.right - S(10), wr.bottom - S(10))
     H = wr.bottom - wr.top
@@ -143,6 +249,17 @@ def tab_rows():
 def tab(name, sub=False, level=None):
     """Click a tab by name in the first-level row (sub=False), the second (sub=True) or any `level`."""
     lv = level if level is not None else (1 if sub else 0)
+    if auto.IS_MAC:
+        for _ in range(10):
+            native = _native_tab_hit(name)
+            if native:
+                jy_ui.click(native[1], native[2])
+                time.sleep(0.7)
+                if name == "美颜美体" and not _native_tab_hit("美颜预设"):
+                    jy_ui.click(native[1], native[2])
+                    time.sleep(0.7)
+                return native
+            time.sleep(0.3)
     rows = tab_rows()
     order = ([rows[lv]] if lv < len(rows) else []) + [r for i, r in enumerate(rows) if i != lv]
     for r in order:                          # the expected row first, then the others (layout differs per build)
@@ -172,7 +289,8 @@ def row(label, scroll_tries=6):
         if labs:
             lab = sorted(labs, key=lambda h: h[2])[0]
             # re-OCR just this row: tiny values like a lone "0" are often missed in a full-panel pass
-            band = jy_ui.texts((x0, int(lab[2]) - S(28), PANEL[2], int(lab[2]) + S(28)))
+            band = jy_ui.texts((x0, int(lab[2]) - S(28), PANEL[2], int(lab[2]) + S(28)),
+                               upscale=2 if auto.IS_MAC else 1)
             nums = [h for h in band if h[1] > lab[3][2] + S(40) and re.fullmatch(r"-?[\d.]+(dB|%|x|s|°)?", norm(h[0]))]
             if nums:
                 return lab, max(nums, key=lambda h: h[1])
@@ -187,8 +305,7 @@ def _double_click(x, y):
 
 
 def _box_selected(cx, cy):
-    """Windows: a focused number box shows its text with a teal selection highlight. NOT used as a gate on Mac
-    (no teal there — the 2026-11-19 Mac test): there type_value() relies on select-all + read-back instead."""
+    """A focused input shows a teal selection highlight; used as a gate on Windows and Mac."""
     import numpy as np
     im = np.asarray(jy_ui.grab((int(cx) - S(45), int(cy) - S(16), int(cx) + S(45), int(cy) + S(16)))).astype(int)
     r, g, b = im[..., 0], im[..., 1], im[..., 2]
@@ -200,9 +317,10 @@ def type_value(x, y, value, readback, defocus=None, paste=False, what="数值", 
     """Put `value` into the input at (x, y) and VERIFY it with readback() -> bool.
 
     attempt 1: click · 2: double-click · 3: click an inert spot (defocus) then click.
-    Windows: typing only when the box shows its teal focus (as before; `focused` overrides the check). Mac: no teal
-    there -> select-all (⌘A) then type; the read-back decides, and a wrong result raises."""
+    Both platforms verify the teal selection before typing; Mac then uses select-all + paste + Enter and reads back."""
     import steps
+    if auto.IS_MAC:
+        paste = True
     for attempt in range(3):
         if attempt == 0:
             jy_ui.click(x, y)
@@ -212,12 +330,13 @@ def type_value(x, y, value, readback, defocus=None, paste=False, what="数值", 
             if defocus:
                 auto.Click(int(defocus[0]), int(defocus[1]), waitTime=0.25)
             jy_ui.click(x, y)
+        jy_ui.fx({"type": "clear"})
         time.sleep(0.3)
-        teal = (not auto.IS_MAC) and (focused() if focused else _box_selected(x, y))
-        if not teal and not auto.IS_MAC:
-            continue                                  # Windows: never type into an unfocused box (as before)
+        teal = focused() if focused else _box_selected(x, y)
         if not teal:
-            jy_ui.keys("{Ctrl}a", wait=0.15)          # Mac: ⌘A selects the box's text
+            continue                                  # never type into an unverified box
+        if auto.IS_MAC or not teal:
+            jy_ui.keys("{Ctrl}a", wait=0.15)          # Mac: select the whole existing value before pasting
         if paste:
             auto.SetClipboardText(str(value))
             jy_ui.keys("{Ctrl}v", wait=0.3)
@@ -236,7 +355,11 @@ def _num(s):
 
 def set_value(label, value, fx_label=None, color=None):
     lab, num = row(label)
-    x, y = num[1], num[2]
+    # v1.1.4(mac 实测): OCR 给的是文字框「顶部」，点顶部会落在行间缝隙 → 点行中心才中
+    x, y = num[1], (num[2] + num[3][3]) / 2 if num[3] else num[2]
+    native = _native_number_hit(lab[2])
+    if native:
+        x, y = native
     if fx_label:
         jy_ui.fx({"type": "status", "text": fx_label})
     if color:

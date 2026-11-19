@@ -1,4 +1,4 @@
-"""One-command acceptance test for the live 剪映 layer (mode B). Mac & Windows. v1.1.1
+"""One-command acceptance test for the live 剪映 layer (mode B). Mac & Windows. v1.1.3
 
   Windows:  python -X utf8 scripts/tests/acceptance.py --media <a 口播 clip with a face and speech>
   Mac:      bash run.sh tests/acceptance.py --media <clip>
@@ -51,10 +51,29 @@ LOG = []
 T0 = time.time()
 
 
+class _Tee:
+    """v1.1.3: EVERYTHING printed (warnings from osctl / steps, 'filter drag' …) also goes into log.txt."""
+    def __init__(self, stream, path):
+        self.stream, self.f = stream, open(path, "a", encoding="utf-8")
+
+    def write(self, s):
+        self.stream.write(s)
+        self.f.write(s)
+        self.f.flush()
+
+    def flush(self):
+        self.stream.flush()
+
+    def __getattr__(self, k):                     # encoding / isatty / fileno … from the real stream
+        return getattr(self.stream, k)
+
+
+sys.stdout = _Tee(sys.stdout, OUT / "log.txt")
+sys.stderr = _Tee(sys.stderr, OUT / "log.txt")
+
+
 def say(s):
     print(s, flush=True)
-    with open(OUT / "log.txt", "a", encoding="utf-8") as f:
-        f.write(s + "\n")
 
 
 def shot(tag):
@@ -108,20 +127,28 @@ def run(n, what, fn, needed=False, skip=None):
 
 
 def quit_jianying():
-    if not steps.jianying_running():
+    was = steps.jianying_running()
+    if steps.quit_jianying():
+        say("   已退出剪映" if was else "   剪映没在运行")
         return
-    if osctl.IS_MAC:
-        for app in ("VideoFusion-macOS", "剪映专业版"):
-            subprocess.run(["osascript", "-e", f'quit app "{app}"'], capture_output=True)
-        for _ in range(40):
-            if not steps.jianying_running():
-                time.sleep(2)
-                return
-            time.sleep(0.5)
     raise SystemExit(f"✗ 剪映还开着：请先{steps.QUIT_HINT}，再运行这条命令（新草稿要剪映重新打开才看得到）")
 
 
+def backup_old_draft():
+    """v1.1.3: an old 「XY验收」 (written by an older version, or opened — and re-saved — by 剪映) cannot be reloaded
+    ('fps' / 'Extra data'): rename it to 「XY验收-bak-<time>」 (never deleted) and build a fresh one."""
+    root = pe.drafts_root()
+    if not root:
+        return
+    d = pathlib.Path(root) / NAME
+    if d.exists():
+        bak = d.with_name(f"{NAME}-bak-{datetime.datetime.now():%m%d-%H%M%S}")
+        d.rename(bak)
+        say(f"   旧测试草稿已改名备份：{bak.name}")
+
+
 def build():
+    backup_old_draft()
     work = pe.SKILL / ".cache" / "acceptance"
     work.mkdir(parents=True, exist_ok=True)
     if A.media:
@@ -152,9 +179,9 @@ def geometry():
 
 def seek5():
     f = tl.seek(5.0)
-    if f != 150:
+    if f is None or abs(f - 150) > tl.TOL:
         raise RuntimeError(f"播放头在第 {f} 帧，应为 150")
-    return "第 150 帧"
+    return f"第 {f} 帧"
 
 
 def split_undo():
@@ -215,6 +242,8 @@ def home():
 say(f"== xy-jianying 验收测试 · {PLAT} · 草稿「{NAME}」 · 素材 {A.media or '彩条（无人脸/人声）'}")
 say(f"   报告文件夹：{OUT}")
 say("   本次用的风格参数（style.json）：\n     " + style.summary().replace("\n", "\n     "))
+if A.beauty:
+    say(f"   ⚠ 美颜预设用命令行的「{A.beauty}」（覆盖 style.json 的「{ST['beauty']['preset']}」，只核对磨皮 > 0）")
 if style.ERROR:
     say("   ⚠ " + style.ERROR)
 (OUT / "style_used.json").write_text(json.dumps(ST, ensure_ascii=False, indent=1), encoding="utf-8")

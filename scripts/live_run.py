@@ -68,6 +68,10 @@ def check_total(expect_s, what):
     return f
 
 
+def apply_beauty_for_job(job, at):
+    return steps.apply_beauty_preset(at, job.get("beauty_preset"))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("job")
@@ -169,7 +173,7 @@ def main():
                 if k < J.get("beauty_from", 1):
                     continue
                 status(f"03 美颜 {k}/{len(face)}")
-                steps.apply_beauty_preset((s["start"] + s["end"]) / 2)
+                apply_beauty_for_job(J, (s["start"] + s["end"]) / 2)
                 fx(type="stats", text=f"已剪掉 {cut_sum:.1f}s · 成片 {total:.1f}s · 用时 {elapsed()}")
             step = 4
 

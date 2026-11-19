@@ -13,9 +13,10 @@ Read this before changing anything in `scripts/steps.py`, `scripts/timeline.py`,
 7. Position calibration (v0.6)
 
 ## 1. Ground rules
-- 剪映 11.8 is QML: almost no UI Automation IDs (only window, timeline container, undo/redo/export, its own AI
-  assistant). Everything else is found by **OCR on screenshots** (`jy_ui.texts / find / click_text`), in
-  physical 4K pixels; the process is per-monitor DPI aware. OCR runs on the GPU (`gpu_env` + onnxruntime-gpu).
+- 剪映 11.8 is QML. Windows uses UIA where available. Mac 11.8 also exposes native Accessibility elements:
+  use `panel.native_tabs()` / `_native_tab_hit()` for tabs and controls, `timeline._native_progress()` for exact
+  timecodes, and native text-field focus + paste for content. OCR still handles geometry, font results and visual
+  read-back; coordinates are physical pixels. Mac screen capture uses Quartz directly.
 - Every UIA call goes through `steps.uia_retry` (transient `EVENT_E_NO_SUBSCRIBERS` while pages switch).
 - **Never press Esc** (un-maximises the window). Close pickers by clicking an inert label.
 - **Never type unless a text box is verified focused** (teal selection highlight in pixels). Keys sent to the
@@ -34,14 +35,15 @@ Read this before changing anything in `scripts/steps.py`, `scripts/timeline.py`,
   ruler band, the player timecode and the main-track row by OCR — call it again after any layout change.
 - `calibrate()`: OCR ruler labels `mm:ss` only (rejects 4-part timecodes from clip headers), median slope,
   rejects outliers; raises if fewer than 3 consistent labels.
-- `seek(t)`: click the ruler at `max(t, 0.5)` (the left edge ignores clicks), re-click if the jump missed by
-  > 1 s, then ←/→ frame steps until the player timecode equals `round(t*30)`; raises `Pause` otherwise.
+- `seek(t)`: on Mac, click and correct by measured error, use the closest result when snapping interferes, then
+  verified single-frame steps; zero uses a clickable 0.5-s point plus drag/Home fallbacks. Native timecode read-back
+  is preferred over OCR. Never report 0 without a successful read-back.
 - `split_at(t)`: Ctrl+B splits the **selected** clip → select the main-track clip at t first.
 
 ## 3. Number boxes, colours, fonts
-- `panel.set_value(label, v)`: find the row by OCR (exact label first), re-OCR the row band for the value box
-  (tiny "0"s are missed in full-panel OCR), click → teal highlight? → else double-click → else label-click +
-  click → type → Enter.
+- `panel.set_value(label, v)`: find the row by OCR; on Mac use native slider-adjacent number frames when available,
+  clear overlay effects before reading, and use 2× OCR for small values. Every click has explicit click state;
+  type only after a verified teal selection. Mac commits with select-all + paste + Enter and reads the value back.
 - `steps.set_xy(x, y)`: OCR glues "X900"; the X box is the left value, Y the right one.
 - `steps.set_color(hex)`: click the MIDDLE of the colour swatch (its right end is a dropdown) → picker → Hex box
   (OCR may glue 「Hex FFFFFF」 into one token or miss the white value: fall back to the gap between 「Hex ⌄」

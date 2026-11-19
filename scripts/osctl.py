@@ -215,8 +215,7 @@ elif IS_MAC:
 
     def _mouse(kind, x, y, button=Quartz.kCGMouseButtonLeft, clicks=1):
         ev = Quartz.CGEventCreateMouseEvent(None, kind, _pt(x, y), button)
-        if clicks > 1:
-            Quartz.CGEventSetIntegerValueField(ev, Quartz.kCGMouseEventClickState, clicks)
+        Quartz.CGEventSetIntegerValueField(ev, Quartz.kCGMouseEventClickState, clicks)
         _post(ev)
 
     def MoveTo(x, y, moveSpeed=1, waitTime=0.05):
@@ -295,9 +294,95 @@ elif IS_MAC:
             _post(ev)
             time.sleep(0.008)
 
+    _NAV = {123, 124, 125, 126, 115, 119, 116, 121}          # ← → ↓ ↑ Home End PgUp PgDn
+    _NAV_FLAGS = Quartz.kCGEventFlagMaskNumericPad | Quartz.kCGEventFlagMaskSecondaryFn
+
+    def _pump():
+        # NSWorkspace.frontmostApplication is refreshed by notifications on the main run loop; a plain Python
+        # script never runs one, so without this it keeps returning a STALE app (v1.1.2 Mac test: "剪映不是前台程序"
+        # 20+ times while ⌘A/⌘V typing into 剪映 worked fine)
+        try:
+            from Foundation import NSDate, NSRunLoop
+            NSRunLoop.currentRunLoop().runUntilDate_(NSDate.dateWithTimeIntervalSinceNow_(0.02))
+        except Exception:
+            pass
+
+    def _front_window_pid():
+        """Owner of the front-most normal (layer 0) on-screen window — the window server's own z-order, always
+        current. The overlay sits at screen-saver level, so it is never counted."""
+        try:
+            for w in Quartz.CGWindowListCopyWindowInfo(
+                    Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements,
+                    Quartz.kCGNullWindowID) or []:
+                b = w.get("kCGWindowBounds", {})
+                if w.get("kCGWindowLayer", 1) == 0 and b.get("Width", 0) > 200 and b.get("Height", 0) > 200:
+                    return int(w.get("kCGWindowOwnerPID", 0)), str(w.get("kCGWindowOwnerName", ""))
+        except Exception:
+            pass
+        return None, ""
+
+    def frontmost_pid():
+        _pump()
+        try:
+            from AppKit import NSWorkspace
+            a = NSWorkspace.sharedWorkspace().frontmostApplication()
+            return int(a.processIdentifier()) if a else None
+        except Exception:
+            return None
+
+    def frontmost_name():
+        _pump()
+        try:
+            from AppKit import NSWorkspace
+            a = NSWorkspace.sharedWorkspace().frontmostApplication()
+            return f"{a.localizedName()} (pid {a.processIdentifier()}, {a.bundleIdentifier()})" if a else "?"
+        except Exception:
+            return "?"
+
+    def _is_front(pid):
+        return frontmost_pid() == pid or _front_window_pid()[0] == pid
+
+    def jy_to_front(timeout=3.0):
+        """v1.1.3: keys go to the FRONTMOST app. Bring 剪映 to the front (≤ 3 s: NSRunningApplication, then
+        System Events, then `open -b`), and REFUSE to send keys when it is still not in front — keys sent to another
+        app are lost and can do damage there (⌘B / ⌘W / Delete)."""
+        ws = _jy_windows()
+        pid = ws[0][2] if ws else 0
+        if not pid:
+            raise RuntimeError("找不到剪映窗口，没法发按键")
+        if _is_front(pid):
+            return True
+        bundle = None
+        t0 = time.time()
+        while time.time() - t0 < timeout:
+            try:
+                from AppKit import (NSRunningApplication, NSApplicationActivateAllWindows,
+                                    NSApplicationActivateIgnoringOtherApps)
+                a = NSRunningApplication.runningApplicationWithProcessIdentifier_(int(pid))
+                bundle = bundle or (a.bundleIdentifier() if a else None)
+                a.activateWithOptions_(NSApplicationActivateAllWindows | NSApplicationActivateIgnoringOtherApps)
+            except Exception:
+                pass
+            time.sleep(0.25)
+            if _is_front(pid):
+                return True
+        _osa(f'tell application "System Events" to set frontmost of (first process whose unix id is {pid}) to true')
+        time.sleep(0.5)
+        if not _is_front(pid) and bundle:
+            subprocess.run(["open", "-b", str(bundle)], capture_output=True)      # also switches Space
+            time.sleep(1.0)
+        if _is_front(pid):
+            return True
+        wp, wn = _front_window_pid()
+        msg = f"剪映不在前台，没发按键（前台程序：{frontmost_name()}；最前面的窗口属于：{wn} pid {wp}；剪映 pid {pid}）"
+        print("✗ " + msg, flush=True)
+        raise RuntimeError(msg)
+
     def SendKeys(keys, interval=0.06, waitTime=0.3):
         # v1.1.1: 剪映 Mac drops keys sent faster than ~50 ms apart ("{Right}"*3 moved one frame) -> 60 ms per key
         """Supports what xy-jianying uses: {Ctrl}b {Ctrl}v {Enter} {Delete} {Left}{Right}… and plain text."""
+        if keys:
+            jy_to_front()
         i, flags = 0, 0
         while i < len(keys):
             if keys[i] == "{":
@@ -308,7 +393,8 @@ elif IS_MAC:
                     flags |= _MODS[tok]
                     continue
                 if tok in _VK:
-                    _key(_VK[tok], flags)
+                    code = _VK[tok]
+                    _key(code, flags | (_NAV_FLAGS if code in _NAV else 0))
                 elif len(tok) == 1:
                     _key(_CH.get(tok, 0), flags)
                 flags = 0
@@ -425,7 +511,7 @@ elif IS_MAC:
             return True
 
         def Control(self, *a, **k):
-            return _Missing()          # no UI Automation tree on Mac: callers fall back to OCR
+            return _Missing()          # compatibility shim; native AX helpers are used for supported controls
 
     def _osa(script):
         return subprocess.run(["osascript", "-e", script], capture_output=True, text=True).stdout.strip()

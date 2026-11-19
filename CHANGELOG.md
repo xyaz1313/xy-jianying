@@ -3,6 +3,69 @@
 Each iteration: what changed, why (owner feedback / failure seen), how it was verified. Newest first.
 Backlog at the bottom. Any agent working on this skill appends here.
 
+## v1.1.4 — 2026-11-19 · Mac 原生控件读回 + 真机 12/12 通过
+**Why** — Mac 失败不是 NVIDIA / GPU 性能问题，而是 OCR 坐标、焦点、异步刷新和弹窗共同造成的。旧代码还曾在 0 秒定位失败时直接 `return 0`，并在指定字体缺失时静默换字体；两处假成功都已去掉。
+**What**
+- `osctl.py` — Mac 鼠标事件显式写 click state；数字框有真实焦点后才输入。
+- `jy_ui.py` — Mac 使用 Quartz 直接抓屏；`click_text` 优先使用原生控件边框。
+- `panel.py` — 原生页签名称映射、异步控件等待、原生数字框定位；Mac 全选 + 粘贴 + Enter + 读回；小数字用 2× OCR，读状态前清除点击光效。
+- `timeline.py` — 原生 `currentProgress` / `totalProgress` 读回；点击误差收敛、吸附后逐帧微调、0 秒拖动/Home 兜底；异常缩放校准不覆盖旧值。
+- `steps.py` — 原生文本框聚焦并粘贴提交；视频/字幕选中读回；字体框定位、搜索提交、排除搜索框自身，字体缺失时停止；X/Y 使用原生边框并在滚动后重新定位。
+- `overlay/overlay.py` — Mac 不再每个刷新周期 `raise_()`，避免反复抢焦点。
+- `scripts/tests/test_mac_regressions.py` — 新增 32 项 Mac 回归测试。
+**Verified** — MacBook Air / macOS 27.2 / 剪映 11.8：37 项回归通过；同一最新代码从零连续验收 **12/12 ✓ / 0 ✗**，报告 `doctor-report/20261119-214125-acceptance/`。未导出、未发布，只操作测试草稿。
+**Real-source cut** — `doctor-report/real-cut-20261119/`：20.55 秒真实素材删除 6–8 秒，两个片段，最终 557 帧；美颜、滤镜、字幕、两行大字连续完成，`DONE 05:08`，无导出。任务级 `beauty_preset` 覆盖和缺失窗口 0 尺寸处理已加入。
+
+**cutcli 实验（未接入主流程）** — 独立 `XYCLI视频` 草稿中，本地 60 秒视频 + 仓耳榜黑黄色大字已真实打开；但滤镜添加报「找不到滤镜」，且已打开草稿再编辑曾报 `undefined.push`。cutcli 可作证/可备选，但不能宣称全功能替代。
+
+## v1.1.3 — 2026-11-19 · Mac 复测 v1.1.2（6 ✓ / 6 ✗）后的修复（未在 Mac 上复测）
+**Why** — v1.1.2 fixed seek (第 150 帧) and split+undo. Remaining ✗ checked against screenshots, not 豆包's guesses:
+- "剪映不是前台程序" ×20 was mostly a FALSE alarm: `NSWorkspace.frontmostApplication` is only refreshed by run-loop
+  notifications, a plain script never runs one → stale. Proof: step 9 replaced the text with ⌘A/⌘V while warning.
+- 6 美颜: the screenshot shows 自然柔光 applied (card selected, 强度 80). In 11.8 a preset is its own effect; 磨皮 stays 0,
+  so the 磨皮 > 0 check could never pass for a built-in preset.
+- 7 滤镜: one long drag stretched the clip only 3 s → 4.8 s; the ⌘Z undo did not land (clip still 4.8 s in the
+  screenshot), then the "right edge within the first 4 s" guard refused.
+- 8 字幕: 智能字幕 opened fine; the 管理 (custom vocabulary) popup did not → hard fail on an optional extra.
+- 9 大字: text added + replaced OK; the font list did not open (11.8 has a ⌃⌄ stepper at the right of the box).
+- 11 首页: ⌘W did not land once.  Rebuild: an old 「XY验收」 re-saved by 剪映 cannot be reloaded ('fps' / Extra data).
+**What**
+- `osctl.jy_to_front` — pumps the run loop, cross-checks with the window server's z-order (CGWindowList), ≤ 3 s:
+  NSRunningApplication → System Events → `open -b`; if 剪映 is still not in front it RAISES (no blind keys) and
+  names the app that is in front.
+- `overlay.py` — `QT_MAC_DISABLE_FOREGROUND_APPLICATION_TRANSFORM=1`; deactivates itself if it ever becomes active.
+- 美颜 — built-in preset verified by the preset's 强度 > 0; own preset still by beauty.check (磨皮 = 23).
+- 滤镜 — repeated shorter drags from the CURRENT right edge (≤ 45, stops after 6 without progress); only a drag that
+  moved the clip off 0 s is undone.
+- 字幕 — custom vocabulary optional (warn + Esc + recognise anyway).
+- 字体 — focus off the box, then stepper / arrow / box; the list is looked for in the whole window
+  (「搜索字体名称或风格」); 2 rounds. No font substitution.
+- 回首页 — ⌘W once more after re-activating.  acceptance — old 「XY验收」 renamed 「XY验收-bak-<time>」 before
+  rebuilding; prints 已退出剪映; everything printed goes into log.txt.
+**Verified** — Windows: syntax; seek + filter loops simulated with fakes. **NOT run on a Mac.**
+
+## v1.1.2 — 2026-11-19 · Mac 验收 v1.1.1 的 7 个 ✗ 修复（未在 Mac 上复测）
+**Why** — v1.1.1 Mac acceptance (豆包, MacBook Air, 剪映 11.8): 4 ✓ / 7 ✗. Steps 4/5/6 all stopped exactly 4 frames
+short (4.87 / 9.87 / 2.87 s) and step 7 at 0.37 s = the 0.5-s ruler click minus the same 4 frames: ← → Home had NO
+effect at all. The failure screenshot shows the menu bar app is **"Python"** — the overlay (a regular Qt app on Mac)
+was the frontmost app and received every key. Step 9's TypeError was the same seek failure crashing inside its own
+error message (`f"{None if c is None else c/FPS:.2f}"`). Step 8: 剪映 Mac 11.8 has no 「智能文本」 group under 文本.
+(豆包's report blamed batch keys / refresh lag and called it "1 frame"; the readouts say 4 frames and no key moved.)
+**What**
+- `overlay/overlay.py` — Mac: NSApplication activation policy Accessory, so the overlay can never be the front app.
+- `osctl.py` (Mac) — `jy_to_front()` before every SendKeys (checks NSWorkspace frontmost pid, re-activates 剪映);
+  arrow / Home / End / PgUp / PgDn carry NumericPad + Fn flags like real key events.
+- `timeline.seek` — re-read after each key burst; if the readout did not move, re-front 剪映 and re-click the ruler at
+  a position corrected by the measured error (converges with no keyboard at all); waits 0.25–0.3 s before reading;
+  ±1-frame tolerance (`TOL`); no more None-format crash.
+- `steps.recognize_subtitles` — tries 智能字幕 / 识别字幕, the 智能文本 group, then the top-level 「字幕」 tab.
+- `steps.quit_jianying` (Mac: `quit app` is ignored -> pkill), `open_draft` restarts 剪映 once itself when a new
+  draft is missing from the home page; hint no longer names the nonexistent `--from` for acceptance.
+- `install.sh` CRLF -> LF (bash on Mac crashed: `set: -: invalid option`).
+- acceptance prints the `--beauty` override actually used.
+**Verified** — Windows: syntax check; seek simulated with a fake 剪映 (clicks land 4 frames early, keys ignored /
+working): all targets land within ±1 frame. **NOT run on a Mac.** The 字幕 tab path in 剪映 11.8 is a best guess.
+
 ## v1.1.1 — 2026-11-19 · Mac 实测后：一套代码不写死坐标 + 改数值读回核对 + 一条命令验收
 **Why** — the owner's Mac test (MacBook Air, macOS 27.2, 剪映 11.8, run by 豆包 for ~12 h): install / doctor / draft /
 live smoke passed, but every "type a value" action failed and many regions missed: the live layer had Windows-150 %

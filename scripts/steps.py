@@ -69,6 +69,8 @@ def in_editor():
     # Mac (2026-11-19 test): 「导出」 is white on blue and OCRs as garbage in a narrow strip -> look for any
     # editor-only word in the whole top band of the window
     wr = jy_ui.win().BoundingRectangle
+    if wr.right <= wr.left or wr.bottom <= wr.top:
+        return False
     hs = jy_ui.texts((wr.left, wr.top, wr.right, wr.top + S(240)))
     return any(any(norm(h[0]).startswith(w) for w in EDITOR_WORDS) for h in hs)
 
@@ -92,7 +94,14 @@ def go_home():
         jy_ui.click(hits[0][1], hits[0][2]) if hits else jy_ui.click(155, 26)
         time.sleep(0.7)
         jy_ui.click_text("返回首页", (0, 0, 900, 900))
-    wait_for(lambda: not in_editor(), 15, what="回到首页")
+    try:
+        wait_for(lambda: not in_editor(), 15, what="回到首页")
+    except Pause:
+        if not auto.IS_MAC:
+            raise
+        jy_ui.activate()                           # v1.1.3: ⌘W lost once (Mac test) -> once more, in front
+        auto.SendKeys("{Cmd}w", waitTime=1.0)
+        wait_for(lambda: not in_editor(), 15, what="回到首页")
     time.sleep(1.5)
 
 
@@ -101,6 +110,32 @@ JY_EXE = None      # v1.0: no personal path in code — config.json / env JIANYI
 
 def jianying_running():
     return auto.process_running(("JianyingPro.exe",) if not auto.IS_MAC else auto.JY_NAMES)
+
+
+def quit_jianying(timeout=20):
+    """v1.1.2: Mac — `quit app` is ignored by 剪映 (Mac test), so fall back to SIGTERM on its main process."""
+    import subprocess
+    if not jianying_running():
+        return True
+    if auto.IS_MAC:
+        for app in ("VideoFusion-macOS", "剪映专业版"):
+            subprocess.run(["osascript", "-e", f'quit app "{app}"'], capture_output=True)
+        for _ in range(10):
+            if not jianying_running():
+                time.sleep(2)
+                return True
+            time.sleep(0.5)
+        for name in ("VideoFusion-macOS", "剪映专业版", "JianyingPro"):
+            subprocess.run(["pkill", "-x", name], capture_output=True)
+    else:
+        return False                           # Windows unchanged: the user quits 剪映 from the tray
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        if not jianying_running():
+            time.sleep(2)
+            return True
+        time.sleep(0.5)
+    return False
 
 
 def start_jianying():
@@ -152,9 +187,17 @@ def open_draft(name):
         hit = _draft_cards(name, region) or _draft_cards(name, region, upscale=2)
         if not hit:
             time.sleep(0.8)
+    if not hit and not getattr(open_draft, "_restarted", False):
+        # v0.8: a draft written while 剪映 is running is not always picked up -> restart 剪映 ONCE ourselves (v1.1.2)
+        open_draft._restarted = True
+        try:
+            if quit_jianying():
+                return open_draft(name)
+        finally:
+            open_draft._restarted = False
     if not hit:
-        # v0.8: a draft written while 剪映 is running is not always picked up -> 剪映 must be QUIT and restarted
-        raise Pause(f"首页没有草稿「{name}」：请{QUIT_HINT}、再重新打开，然后用 --from 2 继续")
+        raise Pause(f"首页没有草稿「{name}」：请{QUIT_HINT}、再重新打开，然后重新运行"
+                    f"（验收测试加 --skip-build；live_run.py 加 --from 2）")
     x0, y0, x1, y1 = hit[0][3]
     jy_ui.click((x0 + x1) / 2, y0 - S(80), label=f"打开草稿 {name}")
     wait_for(in_editor, 30, what="进入编辑页")
@@ -167,11 +210,23 @@ def open_draft(name):
 
 # ---------- timeline helpers ----------
 def select_at(t):
-    jy_ui.click(tl.x_of(t), tl.L["track_y"])
-    time.sleep(0.5)
+    if not auto.IS_MAC:
+        jy_ui.click(tl.x_of(t), tl.L["track_y"])
+        time.sleep(0.5)
+        return
+    for _ in range(3):
+        jy_ui.click(tl.x_of(t), tl.L["track_y"])
+        time.sleep(0.5)
+        if "画面" in panel_tabs():
+            return
+    raise Pause("视频片段属性面板没打开")
 
 
 def panel_tabs():
+    if auto.IS_MAC:
+        native = panel.native_tabs()
+        if native:
+            return native
     rows = panel.tab_rows()
     return [norm(h[0]) for h in rows[0]] if rows else []
 
@@ -219,15 +274,28 @@ def apply_beauty_preset(t, preset=None):
         raise Pause(f"美颜预设里没有「{preset}」：在剪映里存一个同名预设，或在 style.json 的 beauty.preset 改成已有的预设名")
     fx(type="fly", **{"from": [h[0][1], h[0][2] - S(60)]}, to=[tl.x_of(t), tl.L["track_y"]], color=CYAN,
        label=f"美颜 · {preset}", hold=2.2, dur=0.6)
+    def preset_strength():
+        # v1.1.3 (Mac 剪映 11.8): a preset is its own effect with a 「强度」 slider under the cards (自然柔光 → 80);
+        # the 美颜 sliders (磨皮 …) stay 0, so 磨皮 > 0 can never prove a built-in preset. 强度 > 0 does.
+        try:
+            return panel._num(panel.get_value("强度"))
+        except LookupError:
+            return None
+    after = None
     for off in (60, 75, 45):                    # the card's thumbnail sits above its name (Windows 60, Mac ≈75)
         jy_ui.click(h[0][1], h[0][2] - S(off))
         time.sleep(1.2)
+        st = preset_strength()
+        print(f"beauty: card offset {off} -> 强度 {st}", flush=True)
+        if st is not None and st > 0 and not check:
+            panel.scroll(12, down=False)
+            return
         after = smooth()
         if after is not None and ((check and abs(after - float(check[key])) < 0.51) or (not check and after > 0)):
             panel.scroll(12, down=False)
             return
         open_presets()
-    raise Pause(f"美颜预设没套上（{t:.1f}s，{key} {before} → {after}，应为 {check.get(key, '> 0')}）")
+    raise Pause(f"美颜预设没套上（{t:.1f}s，预设强度读不到或为 0；{key} 读到 {after}，应为 {check.get(key, '> 0')}）")
 
 
 # ---------- fonts / colours / presets in the text panel ----------
@@ -235,6 +303,12 @@ FONT_TABS = ("全部", "收藏", "最近", "系统", "品牌", "图搜")
 
 
 def _font_row():
+    if auto.IS_MAC:
+        native = panel._native_tab_hit("字体")
+        if native:
+            box = native[3]
+            x = box[0] - S(50)
+            return ("字体", x, native[2], (x - S(20), box[1], x + S(20), box[3]), 1.0)
     x0, x1 = panel.label_column()
     return wait_for(lambda: jy_ui.find("字体", (x0, panel.PANEL[1], x1, Y(900)), exact=True), 5, what="字体行")[0]
 
@@ -245,43 +319,108 @@ def pick_font(name):
     dropdown, and the list's category row (全部 收藏 最近 系统 …) OCRs as one string."""
     f = _font_row()
     lx = panel.label_column()[0]
+    jy_ui.keys("{Esc}", wait=0.4)                   # v1.1.4(mac): 关掉上一次可能残留的字体列表
     jy_ui.click(f[1], f[2])                         # move focus off any text box (the label is inert)
     time.sleep(0.3)
     lst = (lx, f[2] + S(20), panel.PANEL[2], f[2] + S(760))
+    wr_ = jy_ui.win().BoundingRectangle
 
     def list_open():
-        return [h for h in jy_ui.texts(lst) if "搜索" in h[0] or any(norm(h[0]).startswith(t) for t in FONT_TABS[:3])]
-    arrows = (panel.P(400), panel.PANEL[2] - S(105))      # Windows: P(400) opens it (v0.x)
-    if auto.IS_MAC:                                       # Mac test: P(400) lands in the box; the arrow is at the right
-        arrows = arrows[::-1]
-    for arrow_x in arrows:
+        # v1.1.3: look in the WHOLE window — on Mac 11.8 the list may open above the row or as a floating popup;
+        # the box placeholder is 「搜索字体名称或风格」
+        nonlocal lst
+        hs = jy_ui.texts((wr_.left, wr_.top, wr_.right, wr_.bottom))
+        box = [h for h in hs if "搜索字体" in h[0] or "名称或风格" in h[0]]
+        tabs = [h for h in hs if h[1] > panel.PANEL[0] - S(400) and any(norm(h[0]).startswith(t) for t in FONT_TABS[:3])
+                and abs(h[2] - f[2]) > S(15)]
+        ref = box or tabs
+        if ref:
+            y0 = min(h[2] for h in ref)
+            lst = (min(lx, int(min(h[3][0] for h in ref)) - S(40)), int(y0 - S(40)), panel.PANEL[2], int(y0 + S(760)))
+            return ref
+        return []
+    cur = [h for h in jy_ui.texts((lx, f[2] - S(25), panel.PANEL[2], f[2] + S(25))) if h[1] > f[3][2] + S(20)]
+    arrows = [panel.P(400), panel.PANEL[2] - S(105)]        # Windows: P(400) opens it (v0.x)
+    if auto.IS_MAC:
+        # v1.1.4(mac 实测 2026-11-19): PANEL[2]-S(30)=3337 落在窗口最右边缘，点了不响应；
+        # PANEL[2]-S(105)=3262 / -S(70)=3297 / -S(270)=3097 / P(400)=3090 实测都能打开列表。
+        arrows = [panel.PANEL[2] - S(105), panel.PANEL[2] - S(70), panel.PANEL[2] - S(270)] \
+                 + ([cur[0][1]] if cur else []) + [panel.P(400)]
+        native = panel._native_tab_hit("字体")
+        if native:
+            arrows.insert(0, native[1])
+    for attempt in range(2):
+        for arrow_x in arrows:
+            if list_open():
+                break
+            jy_ui.click(f[1], f[2])                 # focus off any text box first (Mac: the box ate the click)
+            time.sleep(0.3)
+            jy_ui.click(arrow_x, f[2])
+            time.sleep(1.2)
         if list_open():
             break
-        jy_ui.click(arrow_x, f[2])
-        time.sleep(1.0)
+        jy_ui.keys("{Esc}", wait=0.4)
     if not list_open():
-        raise Pause("字体列表没打开")
+        raise Pause("字体列表没打开（点了下拉箭头 / 字体框，没看到「搜索字体名称或风格」）")
 
     def font_hits():
-        return [h for h in jy_ui.texts(lst) if norm(h[0]) == name and not any(t in h[0] for t in ("全部收藏", "最近系统"))]
+        hs = [h for h in jy_ui.texts(lst) if norm(h[0]) == name and not any(t in h[0] for t in ("全部收藏", "最近系统"))]
+        # v1.1.4(mac 实测): 搜索后「搜索框里显示的就是关键词本身」，OCR 会把它当成一条命中项，
+        # 而代码取 y 最小的 → 点中的是搜索框，字体永远不变（实测 hits 是 (2841,736) 搜索框 + (2890,1042) 结果）。
+        by = search_y
+        if by is None:
+            box = [b for b in jy_ui.texts(lst) if "搜索" in b[0]]
+            by = box[0][2] if box else None
+        if by is not None:
+            hs = [h for h in hs if abs(h[2] - by) > S(40)]
+        return hs
     hits = []
+    search_y = None
     fav = [h for h in jy_ui.texts(lst) if norm(h[0]) == "收藏"]
     if fav:
-        jy_ui.click(fav[0][1], fav[0][2])
+        jy_ui.click(fav[0][1], (fav[0][2] + fav[0][3][3]) / 2)
         time.sleep(0.8)
         hits = font_hits()
     if not hits:
         box = [h for h in jy_ui.texts(lst) if "搜索" in h[0]]
         if box:
+            search_y = box[0][2]
             jy_ui.click(box[0][1], box[0][2])
             time.sleep(0.3)
+            jy_ui.keys("{Ctrl}a", wait=0.3)      # v1.1.4(mac): 清掉上一次的搜索词，否则会拼成「新青年体仓耳榜黑」
             auto.SetClipboardText(name)
-            jy_ui.keys("{Ctrl}v", wait=1.5)
+            jy_ui.keys("{Ctrl}v", wait=0.5)
+            jy_ui.keys("{Enter}", wait=1.0)
             hits = font_hits()
+            if hits:
+                # v1.1.4(mac 实测): 列表里命中项的 OCR 坐标点下去并不生效（点完字体仍是「系统」），
+                # 改成键盘选：输入关键词 → {Down} 选中第一项 → {Enter} 确认（下拉搜索的标准交互）
+                jy_ui.keys("{Down}", wait=0.5)
+                time.sleep(0.3)
+                jy_ui.keys("{Enter}", wait=0.6)
+                time.sleep(1.6)
+                now = [x[0] for x in jy_ui.texts((lx, f[2] - S(25), panel.PANEL[2], f[2] + S(25)))]
+                if name in "".join(now):
+                    return name
     if not hits:
-        raise Pause(f"字体列表里找不到「{name}」（收藏和搜索都没有）")
+        # v1.1.4(mac 实测): 剪映 11.8 的字体搜索框不实时过滤（粘进中文名列表不变），
+        # 所以搜索失败后再在列表里滚动找一遍（滚轮 or {PageDown}）
+        for _ in range(8):
+            try:
+                import pyautogui as pg
+                pg.scroll(-6, x=int((lst[0] + lst[2]) / 2), y=int((lst[1] + lst[3]) / 2))
+            except Exception:
+                jy_ui.keys("{PageDown}", wait=0.3)
+            time.sleep(0.5)
+            hits = font_hits()
+            if hits:
+                break
+    if not hits:
+        raise Pause(f"字体列表里找不到「{name}」（收藏和搜索都没有）；不替换字体")
     h = sorted(hits, key=lambda h: h[2])[0]
-    jy_ui.click(h[1], h[2])
+    # v1.1.4(mac 实测): OCR 给的是文字框「顶部」，点顶部会落在行间缝隙（字体永远不变）；
+    # 点 (顶部+底部)/2 才中——实测点 y=1051 成功，点 y=1042 失败。
+    jy_ui.click(h[1], (h[2] + h[3][3]) / 2)
     time.sleep(2.0)
     now = [x[0] for x in jy_ui.texts((lx, f[2] - S(25), panel.PANEL[2], f[2] + S(25)))]
     if name not in "".join(now):
@@ -332,6 +471,8 @@ def set_color(hexv):
 
         def hex_now():
             time.sleep(0.3)
+            if auto.IS_MAC and _native_text_has(hexv):
+                return True
             band = "".join(norm(h[0]) for h in jy_ui.texts((hx[3][0] - S(10), hx[2] - S(22), panel.PANEL[2], hx[2] + S(22))))
             return hexv in band.upper()
         try:
@@ -389,42 +530,75 @@ def recognize_subtitles(words=None):
     jy_ui.click_text("文本", panel.topband())
     time.sleep(0.8)
     side = (M(0), panel.MAT[1], M(200), Y(900))
-    if not jy_ui.find("智能字幕", side):      # 智能文本 is a toggle group: open it only if shut
-        jy_ui.click_text("智能文本", side)
-        time.sleep(0.6)
-    jy_ui.click_text("智能字幕", side)
+    ENTRY = ("智能字幕", "识别字幕")
+
+    def entry():
+        for e in ENTRY:
+            h = jy_ui.find(e, side)
+            if h:
+                return h
+        return None
+    if not entry():
+        # Windows / older Mac: 智能文本 is a toggle group under 文本: open it only if shut
+        for grp in ("智能文本", "智能字幕"):
+            if jy_ui.find(grp, side):
+                jy_ui.click_text(grp, side)
+                time.sleep(0.6)
+                break
+    if not entry():
+        # v1.1.2: 剪映 Mac 11.8 — no 智能文本 group; recognition sits under the top-level 「字幕」 tab
+        if jy_ui.find("字幕", panel.topband(), exact=True):
+            jy_ui.click_text("字幕", panel.topband(), exact=True)
+            time.sleep(1.0)
+    h = entry()
+    if not h:
+        raise Pause("找不到「智能字幕 / 识别字幕」入口（文本 → 智能文本，或顶部「字幕」）")
+    jy_ui.click(h[0][1], (h[0][2] + h[0][3][3]) / 2)   # v1.1.4(mac): 点行中心
     time.sleep(1.0)
     top = (M(300, True), panel.MAT[1], M(0, True), Y(340))
-    btn = jy_ui.find("新增", top) or jy_ui.find("管理", top)
-    if not btn:
-        raise Pause("找不到自定义词汇的 新增/管理 按钮")
-    jy_ui.click(btn[0][1], btn[0][2])
-    time.sleep(1.2)
-    pop = (M(600, True), btn[0][2] + S(30), M(0, True), btn[0][2] + S(520))       # the vocabulary popup
-    if not [h for h in jy_ui.texts(pop) if "自定义词汇" in h[0]]:      # a second click toggles it shut: reopen
-        jy_ui.click(btn[0][1], btn[0][2])
+    def vocab():
+        # v1.1.3: the custom vocabulary only improves recognition — it is OPTIONAL (Mac 11.8: the 管理 popup
+        # did not open). Failing here must not kill the subtitles.
+        btn = jy_ui.find("新增", top) or jy_ui.find("管理", top)
+        if not btn:
+            return False
+        jy_ui.click(btn[0][1], (btn[0][2] + btn[0][3][3]) / 2)   # v1.1.4(mac): 点行中心
         time.sleep(1.2)
-    if not [h for h in jy_ui.texts(pop) if "自定义词汇" in h[0]]:
-        raise Pause("自定义词汇窗口没打开")
+        pop = (M(600, True), btn[0][2] + S(30), M(0, True), btn[0][2] + S(520))       # the vocabulary popup
+        if not [h for h in jy_ui.texts(pop) if "自定义词汇" in h[0]]:      # a second click toggles it shut: reopen
+            jy_ui.click(btn[0][1], (btn[0][2] + btn[0][3][3]) / 2)
+            time.sleep(1.2)
+        if not [h for h in jy_ui.texts(pop) if "自定义词汇" in h[0]]:
+            return False
 
-    def tags():
-        # tags are small grey text: OCR a 2x upscale (plain OCR read 牢饭 as 车证)
-        return [norm(h[0]).rstrip("X×x") for h in jy_ui.texts(pop, upscale=2)]
+        def tags():
+            # tags are small grey text: OCR a 2x upscale (plain OCR read 牢饭 as 车证)
+            return [norm(h[0]).rstrip("X×x") for h in jy_ui.texts(pop, upscale=2)]
 
-    def have(w, ts):
-        import difflib
-        return any(w == t or (len(t) <= len(w) + 1 and difflib.SequenceMatcher(None, w, t).ratio() >= 0.5) for t in ts)
-    for w in words:
-        if have(w, tags()):
-            continue
-        ph = [h for h in jy_ui.texts(pop) if "enter" in h[0].lower() or "输入关" in h[0]]
-        if not ph:
-            raise Pause("找不到自定义词汇输入框")
-        # Windows: an empty focused input shows a teal border (checked before typing); Mac: no such border ->
-        # select-all + paste, and the tag list read back is the check
-        panel.type_value(ph[0][1], ph[0][2], w, lambda: have(w, tags()), paste=True, what=f"自定义词汇「{w}」",
-                         focused=lambda b=ph[0][3]: _input_focused(b))
-    fx(type="banner", text="自定义词汇", sub=" · ".join(words) + "  → 识别一次就对", hold=2.5)
+        def have(w, ts):
+            import difflib
+            return any(w == t or (len(t) <= len(w) + 1 and difflib.SequenceMatcher(None, w, t).ratio() >= 0.5) for t in ts)
+        for w in words:
+            if have(w, tags()):
+                continue
+            ph = [h for h in jy_ui.texts(pop) if "enter" in h[0].lower() or "输入关" in h[0]]
+            if not ph:
+                return False
+            # Windows: an empty focused input shows a teal border (checked before typing); Mac: no such border ->
+            # select-all + paste, and the tag list read back is the check
+            panel.type_value(ph[0][1], ph[0][2], w, lambda: have(w, tags()), paste=True, what=f"自定义词汇「{w}」",
+                             focused=lambda b=ph[0][3]: _input_focused(b))
+        return True
+    try:
+        vocab_ok = vocab()
+    except Pause as e:
+        print(f"自定义词汇：{e}", flush=True)
+        vocab_ok = False
+    if not vocab_ok:
+        print("⚠ 自定义词汇窗口没打开：跳过热词，直接识别字幕", flush=True)
+        jy_ui.keys("{Esc}", wait=0.4)
+    if vocab_ok:
+        fx(type="banner", text="自定义词汇", sub=" · ".join(words) + "  → 识别一次就对", hold=2.5)
     jy_ui.click(M(460), Y(900))
     time.sleep(0.4)
     jy_ui.click_text("开始识别", (M(0), panel.MAT[3] - S(260), M(0, True), panel.MAT[3] + S(40)))
@@ -446,7 +620,7 @@ def style_subtitles(sample_t=5.0):
         raise Pause("时间线上找不到字幕轨")
     tabs = []
     for h in sorted(hits, key=lambda h: abs(h[1] - xc))[:5]:     # subtitle clips are narrow: try the nearest few
-        jy_ui.click(h[1], h[2])
+        jy_ui.click(h[1], (h[2] + h[3][3]) / 2)   # v1.1.4(mac): 字幕片段点中心
         time.sleep(0.8)
         tabs = panel_tabs()
         if "字幕" in tabs or "文本" in tabs:
@@ -466,19 +640,60 @@ def style_subtitles(sample_t=5.0):
 
 
 # ---------- big keyword text ----------
+def _native_xy_boxes():
+    try:
+        from ApplicationServices import AXUIElementCopyAttributeValue, AXUIElementCreateApplication
+
+        def get(el, name):
+            err, value = AXUIElementCopyAttributeValue(el, name, None)
+            return None if err else value
+
+        def frame(el):
+            m = re.search(r"x:([\d.-]+) y:([\d.-]+) w:([\d.-]+) h:([\d.-]+)", str(get(el, "AXFrame")))
+            return tuple(map(float, m.groups())) if m else None
+
+        app = AXUIElementCreateApplication(jy_ui.win().ProcessId)
+        stack, found = [app], {}
+        while stack:
+            el = stack.pop()
+            desc = get(el, "AXDescription")
+            if desc in ("automationpositionValue", "automationfirstUpButton", "automationsecondUpButton"):
+                found[desc] = frame(el)
+            stack.extend(get(el, "AXChildren") or [])
+        if len(found) != 3 or not all(found.values()):
+            return None
+        xb, first, second = (found[k] for k in ("automationpositionValue", "automationfirstUpButton", "automationsecondUpButton"))
+        scale = auto.ui_scale()
+        yy = second[0] - (first[0] - (xb[0] + xb[2])) - xb[2]
+        return (((xb[0] + xb[2] / 2) * scale, (xb[1] + xb[3] / 2) * scale),
+                ((yy + xb[2] / 2) * scale, (xb[1] + xb[3] / 2) * scale))
+    except Exception:
+        return None
+
+
 def set_xy(x=None, y=None):
     lab, _ = panel.row("位置")
+    if auto.IS_MAC:
+        panel.scroll(4)
+        lab, _ = panel.row("位置")
 
     def band():
-        hs = [h for h in jy_ui.texts((panel.label_column()[0], int(lab[2]) - S(28), panel.PANEL[2], int(lab[2]) + S(28)))
+        hs = [h for h in jy_ui.texts((panel.label_column()[0], int(lab[2]) - S(28), panel.PANEL[2], int(lab[2]) + S(28)),
+                                      upscale=2 if auto.IS_MAC else 1)
               if re.fullmatch(r"[XYxy]?-?[\d.]+", norm(h[0])) and h[1] > lab[3][2] + S(40)]
-        return sorted(hs, key=lambda h: h[1])
-    b = band()
-    if len(b) < 2:
-        raise Pause(f"位置行没读全：{[h[0] for h in b]}")
-    # OCR may glue the 'X' label to the value ("X900"): click the value part (right side of that token)
-    xb, yb = b[0], b[-1]
-    boxes = {0: (xb[3][2] - S(25) if xb[0][:1] in "XxYy" else xb[1], xb[2]), 1: (yb[1], yb[2])}
+        hs = sorted(hs, key=lambda h: h[1])
+        pure = [h for h in hs if re.fullmatch(r"-?[\d.]+", norm(h[0]))]
+        return pure or hs
+    native = _native_xy_boxes() if auto.IS_MAC else None
+    if native:
+        boxes = {0: native[0], 1: native[1]}
+    else:
+        b = band()
+        if len(b) < 2:
+            raise Pause(f"位置行没读全：{[h[0] for h in b]}")
+        # OCR may glue the 'X' label to the value ("X900"): click the value part (right side of that token)
+        xb, yb = b[0], b[-1]
+        boxes = {0: (xb[3][2] - S(25) if xb[0][:1] in "XxYy" else xb[1], xb[2]), 1: (yb[1], yb[2])}
     for i, val in ((0, x), (1, y)):
         if val is None:
             continue
@@ -491,11 +706,73 @@ def set_xy(x=None, y=None):
         panel.type_value(*boxes[i], val, ok, defocus=(lab[1], lab[2]), what="位置 " + "XY"[i])
 
 
+def _native_text_values():
+    try:
+        from ApplicationServices import AXUIElementCopyAttributeValue, AXUIElementCreateApplication
+
+        def get(el, name):
+            err, value = AXUIElementCopyAttributeValue(el, name, None)
+            return None if err else value
+
+        app = AXUIElementCreateApplication(jy_ui.win().ProcessId)
+        stack, values = [app], []
+        while stack:
+            el = stack.pop()
+            if get(el, "AXRole") == "AXTextField":
+                value = get(el, "AXValue")
+                if isinstance(value, str):
+                    values.append(value)
+            stack.extend(get(el, "AXChildren") or [])
+        return values
+    except Exception:
+        return []
+
+
+def _native_text_has(text):
+    wanted = text.upper().lstrip("#")
+    return any(wanted in value.upper().lstrip("#") for value in _native_text_values())
+
+
+def _native_replace_content(text):
+    try:
+        from ApplicationServices import AXUIElementCopyAttributeValue, AXUIElementCreateApplication, AXUIElementSetAttributeValue
+
+        def get(el, name):
+            err, value = AXUIElementCopyAttributeValue(el, name, None)
+            return None if err else value
+
+        app = AXUIElementCreateApplication(jy_ui.win().ProcessId)
+        stack, fields = [app], []
+        while stack:
+            el = stack.pop()
+            if get(el, "AXRole") == "AXTextField":
+                fields.append(el)
+            stack.extend(get(el, "AXChildren") or [])
+        if len(fields) != 1:
+            return False
+        field = fields[0]
+        AXUIElementSetAttributeValue(field, "AXFocused", True)
+        AXUIElementSetAttributeValue(field, "AXValue", text)
+        return get(field, "AXValue") == text
+    except Exception:
+        return False
+
+
 def replace_content(text):
     """Replace the selected text clip's content (verified by reading it back).
     v0.8: on a SUBTITLE clip the first text in this band is the 「文本、排列、气泡、花字应用到全部字幕」 checkbox
     row — double-clicking it un-ticked the checkbox. Skip that row, take the content box below it.
     v1.1.1: the band starts BELOW the panel's tab rows (Mac: the band hit the 「文本」 tab)."""
+    if auto.IS_MAC:
+        t0 = time.time()
+        while time.time() - t0 < 5:
+            if _native_replace_content(text):
+                auto.SetClipboardText(text)
+                jy_ui.keys("{Ctrl}a", wait=0.1)
+                jy_ui.keys("{Ctrl}v", wait=0.2)
+                jy_ui.keys("{Enter}", wait=0.2)
+                return
+            time.sleep(0.3)
     rows = panel.tab_rows()
     y0 = int(max(h[3][3] for h in rows[min(1, len(rows) - 1)]) + S(10)) if rows else Y(180)
     c = wait_for(lambda: [h for h in jy_ui.texts((panel.P(20), y0, panel.PANEL[2], y0 + S(200)))
@@ -712,6 +989,8 @@ def _purple_row(x0, x1):
 
 def scroll_tracks_top():
     """Scroll the timeline's track area to the TOP (new filter / effect rows are added above everything)."""
+    if auto.IS_MAC:
+        return
     r = tl.L["tl"]
     auto.MoveTo(int(r[0] + (r[2] - r[0]) * 0.3), int((r[1] + r[3]) / 2))   # inside the tracks, no calibration needed
     for _ in range(12):
@@ -770,26 +1049,43 @@ def add_filter_full(name=None, strength=None, total=None):
     full_end = _purple_right_edge(y, tl.x_of(end) - S(30), tl.x_of(end) + S(40))
     if starts_at_zero() and full_end is not None and abs(full_end - tl.x_of(end)) <= S(8):
         ok = True
-    for off in (() if ok else (1, 2, 0, 3)):
-        redge = _purple_right_edge(y, tl.x_of(0), tl.x_of(4))
+    # v1.1.3 (Mac test: one long drag moved the edge only 3 s → 4.6 s, then the guard "right edge must be in the
+    # first 4 s" refused to go on): grab the CURRENT right edge wherever it is and drag again; every drag that
+    # lengthens the clip is kept (no undo), a drag that moved the clip off 0 s is undone.
+    offs = (1, 2, 0, 3)
+    stall = 0
+    for i in range(0 if ok else 45):         # stops early: 6 drags in a row with no progress
+        redge = _purple_right_edge(y, tl.x_of(0), tl.x_of(end) + S(40))
         if redge is None:
             raise Pause(f"找不到新滤镜片段的右边缘 {dbg}")
-        if redge >= tl.x_of(4) - S(3):
-            raise Pause(f"滤镜片段比 4 秒长、又没到片尾：右边缘不在前 4 秒里，不敢拖（会整段挪走）{dbg}")
-        before = (starts_at_zero(), redge)
-        auto.DragDrop(int(redge) + S(off), int(y), int(tl.x_of(end)) + 2, int(y), moveSpeed=0.5, waitTime=0.8)
+        if starts_at_zero() and abs(redge - tl.x_of(end)) <= S(8):
+            ok = True
+            break
+        off = offs[stall % len(offs)]
+        goal = min(tl.x_of(end) + 2, redge + S(900))      # shorter drags register better on Mac
+        auto.DragDrop(int(redge) + S(off), int(y), int(goal), int(y), moveSpeed=0.5, waitTime=0.8)
         time.sleep(0.6)
         redge2 = _purple_right_edge(y, tl.x_of(0), tl.x_of(end) + S(40))
         z = starts_at_zero()
         dbg.append(dict(off=off, y=int(y), redge=int(redge), after=None if redge2 is None else int(redge2),
                         end_x=int(tl.x_of(end)), zero=z))
         print("filter drag:", dbg[-1], flush=True)
+        if not z:                                    # grabbed the body: the clip MOVED -> undo that drag
+            tl.undo()
+            time.sleep(0.6)
+            if not starts_at_zero():
+                raise Pause(f"滤镜片段被拖离了 0 秒、撤销也没回来 {dbg}")
+            stall += 1
+            continue
         if z and redge2 is not None and abs(redge2 - tl.x_of(end)) <= S(8):
             ok = True
             break
-        if (z, redge2) != before:                    # the drag changed something (moved / fell short): undo it
-            tl.undo()                                # (never undo a no-op drag: that would undo ADDING the filter)
-            time.sleep(0.6)
+        if redge2 is None or redge2 <= redge + 2:    # nothing happened: try another grab point
+            stall += 1
+            if stall >= 6:
+                break
+        else:
+            stall = 0
     if not ok:
         raise Pause(f"滤镜没能从 0 秒拉到片尾（试了 4 个抓点）：{dbg}")
     fx(type="fly", **{"from": [tl.x_of(0), y]}, to=[tl.x_of(end), y], color=PURPLE, label=f"滤镜 · {name} {strength}",
