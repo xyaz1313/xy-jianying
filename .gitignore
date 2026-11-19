@@ -3,3 +3,6 @@ __pycache__/
 *.pyc
 *.skill
 @AutomationLog.txt
+.venv/
+.cache/
+doctor-report/

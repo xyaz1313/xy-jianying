@@ -21,11 +21,10 @@ from PIL import Image, ImageDraw, ImageFont
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import director  # noqa: E402
 
-COLORS = {"bait": "FFE600", "warn": "FF287F", "us": "2BE36B"}
+from style import ST  # noqa: E402  (v1.1.1: colours + animations by mood come from style.json)
+COLORS = {k: v["color"] for k, v in ST["keyword"]["moods"].items()}
 # entrance animation by mood (names exactly as in 剪映 文本 → 动画 → 入场)
-ANIMS = {"bait": "打字机I",      # the lure "types out" like a chat message
-         "warn": "放大",        # warnings hit hard
-         "us": "向上弹入"}       # our verdict pops up confidently
+ANIMS = {k: v["anim"] for k, v in ST["keyword"]["moods"].items()}   # names exactly as in 剪映 文本 → 动画 → 入场
 MOOD_CN = {"bait": "诱饵/钱 → 黄", "warn": "骗局/警告 → 玫红", "us": "我方观点 → 绿"}
 DUR = 3.0
 

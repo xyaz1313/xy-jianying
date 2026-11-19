@@ -14,6 +14,9 @@ import director  # noqa: E402
 import jy_ui  # noqa: E402
 import panel  # noqa: E402
 import timeline as tl  # noqa: E402
+import pathlib
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from platform_env import FF, FFPROBE, ff_font, font as sys_font, hwaccel, venc  # noqa: E402,F401  (v1.1 cross-platform)
 
 plan_p, out_dir, sheet_p = sys.argv[1], sys.argv[2], sys.argv[3]
 __import__("os").makedirs(out_dir, exist_ok=True)  # v0.7: create the frames dir
@@ -24,7 +27,7 @@ total = tl.total_frames() / tl.FPS
 pts = [(k["t"] + 1.5, f"{k['red']} / {k.get('white') or ''}") for k in kws]
 pts += [(0.6, "开头"), (15.0, "证据段"), (30.0, "证据段"), (57.0, "收尾前"), (total - 0.4, "结尾")]
 tiles, report = [], []
-font = ImageFont.truetype("C:/Windows/Fonts/msyhbd.ttc", 20)
+font = ImageFont.truetype(sys_font(), 20)
 
 
 def frame_rect(a):

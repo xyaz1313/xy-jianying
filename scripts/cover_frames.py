@@ -22,14 +22,15 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-FF = next(pathlib.Path.home().joinpath("AppData/Local/Microsoft/WinGet/Packages").rglob("ffmpeg.exe"))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from platform_env import FF, FFPROBE, ff_font, font as sys_font, hwaccel, venc  # noqa: E402,F401  (v1.1 cross-platform)
 FACE = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
 EYE = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_eye_tree_eyeglasses.xml")
 
 
 def frames(path, every):
     W, H = 1920, 1080
-    p = subprocess.Popen([str(FF), "-hide_banner", "-loglevel", "error", "-hwaccel", "cuda", "-i", str(path),
+    p = subprocess.Popen([str(FF), "-hide_banner", "-loglevel", "error", *hwaccel(), "-i", str(path),
                           "-vf", f"fps=1/{every},scale={W}:{H}", "-f", "rawvideo", "-pix_fmt", "bgr24", "-"],
                          stdout=subprocess.PIPE)
     i = 0
@@ -94,7 +95,7 @@ def main():
             picked.append((sc, c, t, img, info))
         if len(picked) >= top:
             break
-    font = ImageFont.truetype("C:/Windows/Fonts/msyhbd.ttc", 30)
+    font = ImageFont.truetype(sys_font(), 30)
     tiles, meta = [], []
     for n, (sc, c, t, img, info) in enumerate(picked, 1):
         # OUTPUT seeking (-ss after -i) = frame-accurate; input seeking gave a different frame than the tile

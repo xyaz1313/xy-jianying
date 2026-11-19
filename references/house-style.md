@@ -11,6 +11,8 @@ tags:
 ---
 # Talking-Head Edit Preset
 
+> **v1.1.1 起，下面所有数值都在技能根目录的 `style.json` 里**（代码只从那里读）。这一页讲每个数为什么这样定；要改风格，改 `style.json`，再在这页「变更记录」里记一行。
+
 Back to Knowledge Library MOC · used by 2026-11-17 AI Auto-Editing with JianYing · skills: AI Editing Skill Stack
 
 > 小爷自己的**口播剪辑风格**（2026-11-17 小爷在剪映 11.8 里亲手调好、截图给 Agent）。Agent 剪口播时**默认套用这一套**；小爷改了就在这里更新，并在变更记录里加一行。

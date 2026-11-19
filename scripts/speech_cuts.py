@@ -23,7 +23,8 @@ import sys
 
 import numpy as np
 
-FF = next(pathlib.Path.home().joinpath("AppData/Local/Microsoft/WinGet/Packages").rglob("ffmpeg.exe"))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from platform_env import FF, FFPROBE, ff_font, font as sys_font, hwaccel, venc  # noqa: E402,F401  (v1.1 cross-platform)
 SR = 16000
 
 

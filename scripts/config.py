@@ -9,10 +9,12 @@ import json
 import os
 import pathlib
 import subprocess
+import sys
 
 SKILL = pathlib.Path(__file__).resolve().parent.parent
-DEFAULTS = {"jianying_exe": "", "export_root": r"D:\视频成品", "inbox_dir": "", "mirror_dir": "",
-            "keyword_font": "仓耳榜黑", "subtitle_font": "新青年体",
+IS_MAC = sys.platform == "darwin"
+_EXPORT = r"D:\视频成品" if sys.platform == "win32" else str(pathlib.Path.home() / "Movies" / "视频成品")
+DEFAULTS = {"jianying_exe": "", "drafts_root": "", "export_root": _EXPORT, "inbox_dir": "", "mirror_dir": "",
             "bgm": {"name": "", "file": "", "volume_db": -6.3}}
 
 
@@ -21,7 +23,7 @@ def _load():
     p = SKILL / "config.json"
     if p.exists():
         try:
-            cfg.update({k: v for k, v in json.load(open(p, encoding="utf-8")).items() if not k.startswith("_")})
+            cfg.update({k: v for k, v in json.load(open(p, encoding="utf-8")).items() if not k.startswith("_") and v != ""})   # "" = use the per-OS default
         except Exception:                               # a broken config must not stop an edit: fall back
             pass
     return cfg
@@ -31,14 +33,22 @@ CFG = _load()
 
 
 def jianying_exe():
-    """JianyingPro.exe — the newest version found wins when several are installed."""
+    """Windows: JianyingPro.exe (newest version wins). Mac: the 剪映专业版 .app bundle. Linux: None (no 剪映)."""
     for cand in (CFG.get("jianying_exe"), os.environ.get("JIANYING_EXE")):
         if cand and os.path.exists(cand):
             return cand
+    if IS_MAC:
+        hits = []
+        for root in ("/Applications", str(pathlib.Path.home() / "Applications")):
+            hits += glob.glob(os.path.join(root, "*剪映*.app")) + glob.glob(os.path.join(root, "VideoFusion*.app"))
+            hits += glob.glob(os.path.join(root, "JianyingPro*.app"))
+        return sorted(hits)[0] if hits else None
+    if sys.platform != "win32":
+        return None
     try:                                                # a running 剪映 tells us exactly where it lives
         out = subprocess.run(["powershell", "-NoProfile", "-Command",
                               "(Get-Process JianyingPro -ErrorAction SilentlyContinue | Select-Object -First 1).Path"],
-                             capture_output=True, text=True, timeout=10).stdout.strip()
+                             capture_output=True, encoding="mbcs", errors="replace", timeout=10).stdout.strip()
         if out and os.path.exists(out):
             return out
     except Exception:

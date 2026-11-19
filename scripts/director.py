@@ -18,7 +18,8 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-FF = next(pathlib.Path.home().joinpath("AppData/Local/Microsoft/WinGet/Packages").rglob("ffmpeg.exe"))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from platform_env import FF, FFPROBE, ff_font, font as sys_font, hwaccel, venc  # noqa: E402,F401  (v1.1 cross-platform)
 W, H = 3840, 2160
 # 剪映 position units -> canvas pixels. v0.6 CALIBRATED in 剪映 11.8 (draft 校准一号, 4K canvas, text deselected,
 # difference image vs. text moved off-canvas): X 1500 -> +0.1983 W, Y 800 -> -0.1854 H  =>  ~2 units per pixel.
@@ -29,12 +30,10 @@ UX, UY = 0.500, 0.501     # first fit said UX 0.508; its video-rect detector cut
 # (measured: 5 chars = 0.4117 W, one line = 0.190 H; linear in 字号: size 8 -> 0.235 W / 0.108 H)
 CHAR_W, LINE_H = 0.081, 0.190      # CHAR_W corrected for the same 1.6 % width bias (0.0823 raw)
 DUR = 3.0
-FONT = "C:/Windows/Fonts/msyhbd.ttc"          # labels on the preview sheet only
-import glob  # noqa: E402
-import os  # noqa: E402
-_kw = glob.glob(os.path.join(os.environ.get("LOCALAPPDATA", ""), "JianyingPro", "User Data", "Cache", "effect",
-                             "**", "仓耳榜黑.ttf"), recursive=True)
-KW_FONT = _kw[0] if _kw else FONT              # the real 剪映 keyword font, so previews look like the edit
+FONT = sys_font()          # labels on the preview sheet only
+import platform_env  # noqa: E402
+from style import ST  # noqa: E402  (v1.1.1)
+KW_FONT = platform_env.jianying_font(ST["keyword"]["font"]) or FONT             # the real 剪映 keyword font, so previews look like the edit
 
 fr_cas = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
 pr_cas = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_profileface.xml")
@@ -73,8 +72,8 @@ def src_of(layout, t):
 #   => effective 字号 ≈ 12.8 (字号 8 × 缩放 1.6 == 字号 12.8, both linear); both lines RIGHT-aligned to the same edge
 #      (61 px = 1.6 % W from the right), red line's box 1.7 % H from the top, the two lines TOUCH (centre-to-centre
 #      0.148 H at 12.8 → 0.01165 H per 字号) — "上排和下排永远靠在一起".
-KW_SIZE = 13            # default 字号 for big text (owner reference ≈ 12.8); screen footage (no person) uses 14
-KW_SIZE_CENTRE = 14
+KW_SIZE = ST["keyword"]["size"]            # default 字号 for big text (owner reference ≈ 12.8); screen footage (no person) uses 14
+KW_SIZE_CENTRE = ST["keyword"]["size_no_person"]
 PITCH_PER = 0.148 / 12.7          # line pitch (= line box height, lines touch) per 字号, fraction of H
 CHAR_PER = CHAR_W / 14            # one CJK char per 字号, fraction of W
 ASCII_W = 0.7                     # a latin letter/digit ≈ 0.7 CJK char in 仓耳榜黑 (fits 「AI创业兄弟」 X 2186)

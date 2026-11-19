@@ -24,10 +24,12 @@ from PIL import Image, ImageDraw, ImageFont  # noqa: E402
 
 import director  # noqa: E402
 from visual_director import ANIMS, COLORS  # noqa: E402
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from platform_env import FF, FFPROBE, ff_font, font as sys_font, hwaccel, venc  # noqa: E402,F401  (v1.1 cross-platform)
 
 FF = director.FF
 VW, VH = 1280, 720
-CHIP_FONT = "C:/Windows/Fonts/msyhbd.ttc"
+CHIP_FONT = sys_font()
 
 
 def frame(mp4, t):
@@ -123,7 +125,7 @@ def main():
         fc.append(f"{last}[{i}:v]overlay=0:0:enable='between(t,{a:.2f},{b:.2f})'[v{i}]")
         last = f"[v{i}]"
     args += ["-filter_complex", ";".join(fc), "-map", last, "-map", "0:a", "-t", f"{T['total']:.2f}",
-             "-c:v", "h264_nvenc", "-preset", "p4", "-cq", "25", "-pix_fmt", "yuv420p", "-c:a", "copy",
+             *venc(25), "-pix_fmt", "yuv420p", "-c:a", "copy",
              str(out / "preview_visual.mp4")]
     subprocess.run(args, check=True)
     # contact sheet: one frame per keyword (1.4 s in, after the entrance)

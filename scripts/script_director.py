@@ -3,13 +3,15 @@ pause statistics and repeated phrases, so the agent can plan hook / structure / 
 
 python script_director.py <out_dir> <clip1.mp4> <clip1_tx.json> [<clip2.mp4> <clip2_tx.json> ...]
 """
+from style import ST  # noqa: E402  (v1.1.1)
 import difflib
 import json
 import pathlib
 import subprocess
 import sys
 
-FF = next(pathlib.Path.home().joinpath("AppData/Local/Microsoft/WinGet/Packages").rglob("ffmpeg.exe"))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from platform_env import FF, FFPROBE, ff_font, font as sys_font, hwaccel, venc  # noqa: E402,F401  (v1.1 cross-platform)
 PUNCT = "，。！？,.!?"
 
 
@@ -25,7 +27,7 @@ def phrases(tx):
             cur, st = "", None
     if cur:
         out.append((st, words[-1]["e"], cur.strip()))
-    gaps = [b["s"] - a["e"] for a, b in zip(words, words[1:]) if b["s"] - a["e"] >= 0.35]
+    gaps = [b["s"] - a["e"] for a, b in zip(words, words[1:]) if b["s"] - a["e"] >= ST["rhythm"]["pause_min_s"]]
     return d["duration"], out, gaps
 
 
@@ -37,11 +39,11 @@ def main():
     for i, (vid, tx) in enumerate(pairs, 1):
         dur, ph, gaps = phrases(tx)
         sheet = out / f"clip{i}_sheet.jpg"
-        subprocess.run([str(FF), "-hide_banner", "-loglevel", "error", "-y", "-hwaccel", "cuda", "-i", vid, "-vf",
+        subprocess.run([str(FF), "-hide_banner", "-loglevel", "error", "-y", *hwaccel(), "-i", vid, "-vf",
                         f"fps={8 / max(dur, 1)},scale=360:-1,tile=8x1", "-frames:v", "1", str(sheet)])
         lines += [f"## Clip {i} — `{pathlib.Path(vid).name}` · {dur:.1f}s",
                   f"![[{sheet.name}]]", "",
-                  f"Pauses ≥0.35 s: {len(gaps)} (total {sum(gaps):.1f}s)", "",
+                  f"Pauses ≥{ST['rhythm']['pause_min_s']} s: {len(gaps)} (total {sum(gaps):.1f}s)", "",
                   "| # | start | end | dur | line |", "|---|---|---|---|---|"]
         for k, (a, b, t) in enumerate(ph, 1):
             lines.append(f"| {i}.{k} | {a:.2f} | {b:.2f} | {b - a:.1f} | {t} |")

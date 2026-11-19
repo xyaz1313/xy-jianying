@@ -1,53 +1,161 @@
-"""Right-hand property panel helpers for 剪映 (mode B): find a row by its label, type a number into its box."""
+"""Right-hand property panel helpers for 剪映 (mode B): find a row by its label, type a number into its box.
+
+v1.1.1 — no fixed screen coordinates. Every position is either FOUND on screen (OCR anchors: 「素材」 icon row,
+「播放器」 title, the property panel's tab rows, row labels) or an offset from such an anchor scaled with S():
+all offsets were measured on Windows at 150 % (REF), so S(v) = v on that machine and v·2/1.5 on a Retina Mac.
+Y(v) = a Windows window-relative y, moved to this window and scaled the same way.
+Values are typed with type_value(): focus → select all → type → Enter → READ BACK; never trusted blind.
+"""
 import re
 import time
 
-import uiautomation as auto
+import osctl as auto  # v1.1 cross-platform
 
 import jy_ui
 
 PANEL = (3100, 50, 3840, 2080)     # right-hand property panel; recomputed by geom()
 MAT = (540, 50, 1760, 1480)        # left material panel (文本 / 滤镜 / 智能字幕 …); recomputed by geom()
-PLAYER = None                      # player window rect (UIA 'editPanelLoader.editWin')
+PLAYER = None                      # player rect
+WIN = None                         # 剪映 window rect
+TOP_Y = None                       # y centre of the top icon row (素材 音频 文本 … 滤镜)
+REF = 1.5                          # the UI scale every pixel offset in this skill was measured at (Windows 150 %)
+
+
+class _Rect:
+    def __init__(self, l, t, r, b):
+        self.left, self.top, self.right, self.bottom = l, t, r, b
+
+
+def S(v):
+    """A pixel distance measured on Windows 150 %, converted to this screen."""
+    return int(round(v * auto.ui_scale() / REF))
+
+
+def Y(v):
+    """A y measured on the maximised Windows window (top = 0), converted to this window."""
+    top = max(WIN[1], 0) if WIN else 0
+    return int(top + S(v))
+
+
+RIGHT_TABS = ("画面", "音频", "变速", "动画", "调节", "基础", "草稿参数", "文本", "朗读", "AI效果", "字幕", "跟踪", "数字人")
+
+
+def norm(s):
+    return s.replace(" ", "")
+
+
+def _player_by_ocr(wr):
+    """Player rect without UI Automation: 「播放器」 title = top-left; the right-hand property panel's tabs = right
+    edge; the 'HH:MM:SS:FF / HH:MM:SS:FF' readout = bottom. Falls back to 剪映's default proportions."""
+    W, H = wr.right - wr.left, wr.bottom - wr.top
+    ts = jy_ui.texts((wr.left, wr.top, wr.right, wr.top + int(H * 0.78)))
+    title = [t for t in ts if norm(t[0]).startswith("播放器")]   # 「播放器-时间线01」
+    left = int(title[0][3][0] - 20) if title else wr.left + int(W * 0.30)
+    top = int(title[0][3][3] + 11 * auto.ui_scale()) if title else wr.top + int(H * 0.06)
+    tabs = [t for t in ts if norm(t[0]) in RIGHT_TABS and t[1] > left + W * 0.2 and t[2] < top + H * 0.03]
+    right = int(min(t[3][0] for t in tabs) - 25) if tabs else wr.left + int(W * 0.78)
+    tc = [t for t in ts if re.search(r"\d{2}:\d{2}:\d{2}:\d{2}", norm(t[0])) and left < t[1] < right]
+    # the readout sits ~40 pt below the video area (measured on Windows 150 %: UIA bottom 1359, readout top 1418)
+    bottom = int(min(t[3][1] for t in tc) - 40 * auto.ui_scale()) if tc else wr.top + int(H * 0.62)
+    return (left, top, right, bottom)
 
 
 def geom():
-    """Locate the three upper panels from the player window, which is the one UIA element 剪映 11.8 still exposes
-    after a restart (the timeline / export ids can disappear). Everything else is an offset from these rects."""
-    global PANEL, MAT, PLAYER
+    """Locate the player, the property panel and the material panel. Player: UIA id on Windows, OCR elsewhere.
+    Material panel: from the 「素材」 label of the top icon row, searched anywhere above the player (its height
+    differs per platform: Windows y≈95, Mac ≈190 because of the title bar)."""
+    global PANEL, MAT, PLAYER, WIN, TOP_Y
     import steps
     w = steps.uia_retry(jy_ui.win)
     wr = w.BoundingRectangle
+    WIN = (wr.left, wr.top, wr.right, wr.bottom)
     ed = w.Control(searchDepth=3, AutomationId="editPanelLoader.editWin")
-    if not ed.Exists(1, 0):
-        raise LookupError("player window not found")
-    r = ed.BoundingRectangle
-    PLAYER = (r.left, r.top, r.right, r.bottom)
-    PANEL = (r.right + 10, 50, wr.right - 10, wr.bottom - 10)
-    tabs = [h for h in jy_ui.texts((0, 50, r.left, 120)) if h[0].replace(" ", "").startswith("素材")]
-    left = int(tabs[0][3][0] - 35) if tabs else 540
-    MAT = (left, 50, r.left - 15, r.bottom + 110)   # the panel's own bottom bar (开始识别 …) sits below the player rect
+    if ed.Exists(1, 0):
+        r = ed.BoundingRectangle
+        PLAYER = (r.left, r.top, r.right, r.bottom)
+    else:
+        PLAYER = _player_by_ocr(wr)          # Mac (no UIA tree) or a 剪映 build that hides the id
+    r = _Rect(*PLAYER)
+    PANEL = (r.right + S(10), Y(50), wr.right - S(10), wr.bottom - S(10))
+    H = wr.bottom - wr.top
+    zone = (wr.left, max(wr.top, 0), r.left, max(r.top + S(60), wr.top + int(H * 0.16)))
+    tabs = sorted([h for h in jy_ui.texts(zone) if norm(h[0]).startswith("素材")], key=lambda h: h[2])
+    if not tabs:
+        raise steps.Pause("找不到左上角「素材」那一排图标（剪映没在编辑页，或者窗口太小）")
+    TOP_Y = int(tabs[0][2])
+    left = int(tabs[0][3][0] - S(35))
+    MAT = (left, TOP_Y - S(40), r.left - S(15), r.bottom + S(110))  # its bottom bar (开始识别 …) is below the player
     return PANEL, MAT, PLAYER
+
+
+def topband():
+    """The top icon row (素材 音频 文本 贴纸 特效 转场 滤镜 …), from the material panel's left edge to the player."""
+    return (MAT[0], TOP_Y - S(40), PLAYER[0], TOP_Y + S(40))
 
 
 def P(dx):
     """x in the property panel, measured from its left edge (old layout: 3100 + dx)."""
-    return int(PANEL[0] + dx)
+    return int(PANEL[0] + S(dx))
 
 
 def M(dx, from_right=False):
     """x in the material panel: from its left edge (old 540 + dx) or from its right edge (old 1760 - dx)."""
-    return int(MAT[2] - dx if from_right else MAT[0] + dx)
+    return int(MAT[2] - S(dx) if from_right else MAT[0] + S(dx))
 
 
-def tab(name, sub=False):
-    region = (PANEL[0], PANEL[1], PANEL[2], PANEL[1] + (220 if sub else 90))
-    jy_ui.click_text(name, region if not sub else (PANEL[0], PANEL[1] + 90, PANEL[2], PANEL[1] + 220), exact=True)
-    time.sleep(0.7)
+def label_column():
+    """x range where the property panel's row labels (字体 颜色 字号 磨皮 …) sit. Wider than the panel's left edge:
+    on Mac the labels start left of the OCR-estimated player edge."""
+    return PANEL[0] - S(120), PANEL[0] + S(260)
+
+
+# ---------- tab rows ----------
+def _rows(region):
+    """OCR hits of a region grouped into horizontal rows (top to bottom)."""
+    hits = sorted([h for h in jy_ui.texts(region) if norm(h[0])], key=lambda h: h[2])
+    rows = []
+    for h in hits:
+        if rows and abs(h[2] - rows[-1][-1][2]) <= S(16):
+            rows[-1].append(h)
+        else:
+            rows.append([h])
+    return rows
+
+
+def _pick(row, name):
+    exact = [h for h in row if norm(h[0]) == name]
+    if exact:
+        return exact[0]
+    pre = [h for h in row if len(norm(h[0])) >= 2 and (norm(h[0]).startswith(name) or name.startswith(norm(h[0])))
+           and len(norm(h[0])) <= len(name) + 2]
+    return pre[0] if pre else None
+
+
+def tab_rows():
+    """The property panel's tab rows: row 0 = first-level (画面 音频 变速 … / 文本 动画 …), row 1 = second level
+    (基础 抠像 美颜美体 … / 基础 模板 气泡 花字), row 2 = third level (美颜 美型 …). Found by OCR, not by height."""
+    region = (PANEL[0] - S(60), PANEL[1], PANEL[2], PANEL[1] + S(330))
+    rows = [r for r in _rows(region) if 1 <= len(r) <= 9 and all(len(norm(h[0])) <= 6 for h in r)]
+    first = next((i for i, r in enumerate(rows) if any(norm(h[0]) in RIGHT_TABS for h in r)), None)
+    return rows[first:] if first is not None else rows
+
+
+def tab(name, sub=False, level=None):
+    """Click a tab by name in the first-level row (sub=False), the second (sub=True) or any `level`."""
+    lv = level if level is not None else (1 if sub else 0)
+    rows = tab_rows()
+    order = ([rows[lv]] if lv < len(rows) else []) + [r for i, r in enumerate(rows) if i != lv]
+    for r in order:                          # the expected row first, then the others (layout differs per build)
+        h = _pick(r, name)
+        if h:
+            jy_ui.click(h[1], h[2])
+            time.sleep(0.7)
+            return h
+    raise LookupError(f"tab '{name}' not found: {[[norm(h[0]) for h in r] for r in rows]}")
 
 
 def scroll(n, down=True):
-    auto.MoveTo(PANEL[0] + 300, PANEL[1] + 900)
+    auto.MoveTo(PANEL[0] + S(300), PANEL[1] + S(850))
     for _ in range(n):
         (auto.WheelDown if down else auto.WheelUp)(1)
     time.sleep(0.4)
@@ -55,64 +163,90 @@ def scroll(n, down=True):
 
 def row(label, scroll_tries=6):
     """Return (label_hit, number_hit) for a slider row, scrolling down until the label is visible."""
+    x0, x1 = label_column()
     for i in range(scroll_tries):
-        hits = jy_ui.texts(PANEL)
-        cand = [h for h in hits if h[1] < PANEL[0] + 260]
-        labs = [h for h in cand if h[0].replace(" ", "") == label] or \
-               [h for h in cand if h[0].replace(" ", "").startswith(label) and len(h[0].strip()) <= len(label) + 3]
+        hits = jy_ui.texts((x0, PANEL[1], PANEL[2], PANEL[3]))
+        cand = [h for h in hits if h[1] < x1]
+        labs = [h for h in cand if norm(h[0]) == label] or \
+               [h for h in cand if norm(h[0]).startswith(label) and len(h[0].strip()) <= len(label) + 3]
         if labs:
-            lab = labs[0]
+            lab = sorted(labs, key=lambda h: h[2])[0]
             # re-OCR just this row: tiny values like a lone "0" are often missed in a full-panel pass
-            band = jy_ui.texts((PANEL[0], int(lab[2]) - 28, PANEL[2], int(lab[2]) + 28))
-            nums = [h for h in band if h[1] > PANEL[0] + 120 and re.fullmatch(r"-?[\d.]+(dB|%|x|s|°)?", h[0].replace(" ", ""))]
+            band = jy_ui.texts((x0, int(lab[2]) - S(28), PANEL[2], int(lab[2]) + S(28)))
+            nums = [h for h in band if h[1] > lab[3][2] + S(40) and re.fullmatch(r"-?[\d.]+(dB|%|x|s|°)?", norm(h[0]))]
             if nums:
                 return lab, max(nums, key=lambda h: h[1])
             # empty number box: right side of the row
-            return lab, (None, PANEL[2] - 140, lab[2], None, None)
+            return lab, (None, PANEL[2] - S(140), lab[2], None, None)
         scroll(4)
     raise LookupError(f"row '{label}' not found")
 
 
 def _double_click(x, y):
-    import ctypes
-    auto.SetCursorPos(int(x), int(y))
-    for _ in range(2):
-        ctypes.windll.user32.mouse_event(2, 0, 0, 0, 0)
-        ctypes.windll.user32.mouse_event(4, 0, 0, 0, 0)
-        time.sleep(0.05)
+    auto.DoubleClick(int(x), int(y), waitTime=0.05)
 
 
 def _box_selected(cx, cy):
-    """剪映 is QML (no UIA focus info). A focused number box shows its text with a teal selection highlight:
-    look for it in pixels before ever sending keys."""
+    """Windows: a focused number box shows its text with a teal selection highlight. NOT used as a gate on Mac
+    (no teal there — the 2026-11-19 Mac test): there type_value() relies on select-all + read-back instead."""
     import numpy as np
-    im = np.asarray(jy_ui.grab((int(cx) - 45, int(cy) - 16, int(cx) + 45, int(cy) + 16))).astype(int)
+    im = np.asarray(jy_ui.grab((int(cx) - S(45), int(cy) - S(16), int(cx) + S(45), int(cy) + S(16)))).astype(int)
     r, g, b = im[..., 0], im[..., 1], im[..., 2]
     teal = (g > 70) & (b > 70) & (r < 60) & (g - r > 35)
     return teal.mean() > 0.04
 
 
+def type_value(x, y, value, readback, defocus=None, paste=False, what="数值", focused=None):
+    """Put `value` into the input at (x, y) and VERIFY it with readback() -> bool.
+
+    attempt 1: click · 2: double-click · 3: click an inert spot (defocus) then click.
+    Windows: typing only when the box shows its teal focus (as before; `focused` overrides the check). Mac: no teal
+    there -> select-all (⌘A) then type; the read-back decides, and a wrong result raises."""
+    import steps
+    for attempt in range(3):
+        if attempt == 0:
+            jy_ui.click(x, y)
+        elif attempt == 1:
+            _double_click(x, y)
+        else:
+            if defocus:
+                auto.Click(int(defocus[0]), int(defocus[1]), waitTime=0.25)
+            jy_ui.click(x, y)
+        time.sleep(0.3)
+        teal = (not auto.IS_MAC) and (focused() if focused else _box_selected(x, y))
+        if not teal and not auto.IS_MAC:
+            continue                                  # Windows: never type into an unfocused box (as before)
+        if not teal:
+            jy_ui.keys("{Ctrl}a", wait=0.15)          # Mac: ⌘A selects the box's text
+        if paste:
+            auto.SetClipboardText(str(value))
+            jy_ui.keys("{Ctrl}v", wait=0.3)
+        else:
+            jy_ui.keys(str(value), wait=0.08)
+        jy_ui.keys("{Enter}", wait=0.35)
+        if readback():
+            return attempt + 1
+    raise steps.Pause(f"{what}没填进去：{value}")
+
+
+def _num(s):
+    m = re.search(r"-?\d+(\.\d+)?", s or "")
+    return float(m.group()) if m else None
+
+
 def set_value(label, value, fx_label=None, color=None):
     lab, num = row(label)
     x, y = num[1], num[2]
-    jy_ui.click(x, y, label=fx_label)          # unfocused box: one click focuses + selects all
-    time.sleep(0.25)
-    ok = _box_selected(x, y)
-    if not ok:                                  # box was already focused -> the click only moved the caret
-        _double_click(x, y)
-        time.sleep(0.25)
-        ok = _box_selected(x, y)
-    if not ok:                                  # last resort: defocus on the inert row label, click again
-        auto.Click(int(lab[1]), int(lab[2]), waitTime=0.25)
-        auto.Click(int(x), int(y), waitTime=0.25)
-        ok = _box_selected(x, y)
-    if not ok:
-        # never type into the timeline: digits/Enter there could edit the wrong thing
-        raise RuntimeError(f"number box for '{label}' did not take focus")
+    if fx_label:
+        jy_ui.fx({"type": "status", "text": fx_label})
     if color:
-        jy_ui.fx({"type": "click", "at": [num[1], num[2]], "color": color})
-    jy_ui.keys(str(value), wait=0.08)      # text is already selected -> typing replaces it
-    jy_ui.keys("{Enter}", wait=0.25)
+        jy_ui.fx({"type": "click", "at": [x, y], "color": color})
+
+    def ok():
+        time.sleep(0.3)
+        got = _num(get_value(label))
+        return got is not None and abs(got - float(value)) < 0.51
+    type_value(x, y, value, ok, defocus=(lab[1], lab[2]), what=f"「{label}」")
     return lab, num
 
 
@@ -123,10 +257,10 @@ def get_value(label):
 def checkbox(title, on=True):
     """Tick the checkbox left of a section title (e.g. 脸型, 五官精修)."""
     for _ in range(6):
-        hits = [h for h in jy_ui.texts(PANEL) if h[0].replace(" ", "") == title]
+        hits = [h for h in jy_ui.texts(PANEL) if norm(h[0]) == title]
         if hits:
             h = hits[0]
-            jy_ui.click(h[3][0] - 30, h[2])
+            jy_ui.click(h[3][0] - S(30), h[2])
             time.sleep(0.4)
             return h
         scroll(4)

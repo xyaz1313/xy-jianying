@@ -9,7 +9,9 @@ import json
 import os
 import sys
 
-SKILL = os.path.expanduser(r"~\.claude\skills\jianying-editor-reliable")
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import platform_env  # noqa: E402  (v1.1: finds the draft library in any agent's skills folder)
+SKILL = platform_env.dependency_skill("jianying-editor-reliable")
 sys.path.insert(0, os.path.join(SKILL, "scripts"))
 sys.path.insert(0, os.path.join(SKILL, "scripts", "vendor"))
 from jy_wrapper import JyProject  # noqa: E402

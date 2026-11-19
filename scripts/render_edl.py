@@ -10,7 +10,8 @@ import pathlib
 import subprocess
 import sys
 
-FF = next(pathlib.Path.home().joinpath("AppData/Local/Microsoft/WinGet/Packages").rglob("ffmpeg.exe"))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from platform_env import FF, FFPROBE, ff_font, font as sys_font, hwaccel, venc  # noqa: E402,F401  (v1.1 cross-platform)
 
 E = json.load(open(sys.argv[1], encoding="utf-8"))
 out = sys.argv[2]
@@ -50,9 +51,8 @@ script = pathlib.Path(out).with_suffix(".filter.txt")
 script.write_text(";".join(fc), encoding="utf-8")
 cmd = [str(FF), "-hide_banner", "-loglevel", "error", "-y"]
 for f in E["files"]:
-    cmd += ["-hwaccel", "cuda", "-i", f]
-cmd += ["-/filter_complex", str(script), "-map", "[v]", "-map", "[a]", "-c:v", "h264_nvenc", "-preset", "p5",
-        "-b:v", "8M", "-c:a", "aac", "-b:a", "192k", out]
+    cmd += [*hwaccel(), "-i", f]
+cmd += ["-/filter_complex", str(script), "-map", "[v]", "-map", "[a]", *venc(21), "-c:a", "aac", "-b:a", "192k", out]
 subprocess.run(cmd, check=True)
 for s, p, note in parts:
     print(f"{int(s // 60)}:{s % 60:05.2f}  {p:10s} {note}")

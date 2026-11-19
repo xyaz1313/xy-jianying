@@ -1,7 +1,7 @@
 """Mode-B helpers: drive the 剪映 UI like a person, by *seeing* it.
 
 Every action: screenshot -> OCR -> find the label -> click / type -> (optionally) tell the overlay.
-Physical-pixel coordinates throughout (process is per-monitor DPI aware).
+Physical-pixel coordinates throughout (Windows: per-monitor DPI aware; Mac: Retina screenshot pixels, osctl converts).
 
 CLI (handy for rehearsals):
   python jy_ui.py shot <out.png> [x0 y0 x1 y1]       screenshot (whole screen or region)
@@ -9,18 +9,18 @@ CLI (handy for rehearsals):
   python jy_ui.py texts [x0 y0 x1 y1]                 print every OCR'd text with its centre
   python jy_ui.py click <x> <y>
   python jy_ui.py clicktext <text> [x0 y0 x1 y1]
-  python jy_ui.py keys <uiautomation-keys>            e.g. "{Ctrl}b"
+  python jy_ui.py keys <uiautomation-keys>            e.g. "{Ctrl}b"   (on Mac {Ctrl} = ⌘)
 """
-import ctypes
 import json
 import sys
 import time
 import urllib.request
 
-ctypes.windll.shcore.SetProcessDpiAwareness(2)
+import osctl as auto  # noqa: E402  (v1.1: Windows = uiautomation, Mac = Quartz; same API)
 import numpy as np  # noqa: E402
-import uiautomation as auto  # noqa: E402
 from PIL import ImageGrab  # noqa: E402
+
+IS_MAC = auto.IS_MAC
 
 _ocr = None
 OVERLAY = "http://127.0.0.1:8790/event"
@@ -29,16 +29,28 @@ OVERLAY = "http://127.0.0.1:8790/event"
 def ocr_engine():
     global _ocr
     if _ocr is None:
-        import gpu_env  # noqa: F401  (CUDA DLLs for onnxruntime-gpu)
-        import onnxruntime as ort
-        ort.set_default_logger_severity(3)      # silence the harmless 'no plugin EP device' probe warning
-        from rapidocr_onnxruntime import RapidOCR
-        _ocr = RapidOCR(det_use_cuda=True, cls_use_cuda=True, rec_use_cuda=True)
+        import platform_env           # CUDA on NVIDIA, CPU everywhere else (UI text is small: CPU is fine)
+        _ocr = platform_env.ocr_engine()
     return _ocr
 
 
 def win():
-    return auto.WindowControl(searchDepth=1, Name="剪映专业版")
+    """The 剪映 window, always on the MAIN screen: if it opened on an extended screen it is moved over first.
+    v1.1.1 (owner works on a vertical extended screen next to the main one): never act on another screen."""
+    w = auto.WindowControl(searchDepth=1, Name="剪映专业版")
+    if auto.IS_MAC:
+        i = w._info()
+        if i and not auto.on_main_display(i[3]):
+            auto.maximise(w)                         # moves it to the main display
+            time.sleep(0.8)
+            i = w._info()
+            if i and not auto.on_main_display(i[3]):
+                raise RuntimeError("剪映在扩展屏上、挪不回主屏：请把剪映窗口拖回主屏再跑")
+    elif w.Exists(0, 0) and not auto.window_on_primary(w):
+        auto.to_primary(w)
+        if not auto.window_on_primary(w):
+            raise RuntimeError("剪映在扩展屏上、挪不回主屏：请把剪映窗口拖回主屏再跑")
+    return w
 
 
 def activate():
@@ -49,12 +61,17 @@ def activate():
 
 
 def _overlay_pid():
-    import subprocess
-    out = subprocess.run(["netstat", "-ano", "-p", "TCP"], capture_output=True).stdout.decode("mbcs", "ignore")
-    for line in out.splitlines():
-        if "127.0.0.1:8790" in line and "LISTENING" in line:
-            return int(line.split()[-1])
-    return None
+    return auto.port_pid(8790)
+
+
+def _overlay_cmd(path):
+    """POST /hide, /show, /quit to the overlay itself (used on Mac; works on Windows too)."""
+    try:
+        urllib.request.urlopen(urllib.request.Request("http://127.0.0.1:8790" + path, data=b"", method="POST"),
+                               timeout=1)
+        return True
+    except Exception:
+        return False
 
 
 def overlay_stop():
@@ -62,7 +79,11 @@ def overlay_stop():
     import subprocess
     pid = _overlay_pid()
     if pid:
-        subprocess.run(["taskkill", "/PID", str(pid), "/F"], capture_output=True)
+        if IS_MAC:
+            _overlay_cmd("/quit")
+            time.sleep(0.8)
+        if _overlay_pid():
+            auto.kill(pid)
         for _ in range(20):
             if _overlay_pid() is None:
                 break
@@ -129,6 +150,11 @@ def _overlay_hwnds():
 def overlay_show(on):
     """Hide the overlay while 剪映 is on its HOME page (home + overlay = black window); show it again in the editor."""
     import ctypes
+    if IS_MAC:
+        ok = _overlay_cmd("/show" if on else "/hide")
+        time.sleep(0.5)
+        return ok
+    import ctypes
     hs = _overlay_hwnds()
     for h in hs:
         ctypes.windll.user32.ShowWindow(h, 4 if on else 0)          # SW_SHOWNOACTIVATE / SW_HIDE
@@ -137,6 +163,8 @@ def overlay_show(on):
 
 
 def overlay_visible():
+    if IS_MAC:
+        return _overlay_pid() is not None
     import ctypes
     return any(ctypes.windll.user32.IsWindowVisible(h) for h in _overlay_hwnds())
 
@@ -151,26 +179,24 @@ def unblack():
 def repaint(w=None):
     """剪映's home page sometimes stays black (never repainted) after leaving the editor. Escalate until it draws:
     RedrawWindow -> overlay hide/show -> minimise/restore. Returns True when the window shows content."""
-    import ctypes
     w = w or win()
-    h = w.NativeWindowHandle
 
     def ok():
         r = w.BoundingRectangle
-        a = np.asarray(ImageGrab.grab(all_screens=True).crop((r.left + 20, r.top + 140, r.right - 20, r.bottom - 20))
+        a = np.asarray(_screen().crop((r.left + 20, r.top + 140, r.right - 20, r.bottom - 20))
                        .resize((96, 54)))
         return a.std() > 12
     for k in range(3):
         if ok():
             return True
         if k == 0:
-            ctypes.windll.user32.RedrawWindow(h, None, None, 0x0001 | 0x0004 | 0x0080 | 0x0100)
+            auto.redraw(w)
         elif k == 1:
             unblack()
         else:
-            ctypes.windll.user32.ShowWindow(h, 6)       # minimise
+            auto.minimise(w)
             time.sleep(0.8)
-            ctypes.windll.user32.ShowWindow(h, 9)       # restore
+            auto.restore(w)
             w.SetActive()
         time.sleep(1.2)
     return ok()
@@ -181,21 +207,32 @@ def _is_black(im):
     return a.mean() < 12 and np.median(a) < 2
 
 
+def _screen():
+    """Whole screen in physical pixels. Mac: main display at Retina resolution (needs Screen Recording permission)."""
+    # v1.1.1: the MAIN screen only (Windows used all_screens: with an extended screen left of / above the main one
+    # the image origin moved and every crop was off — 剪映 on the extended screen looked "black")
+    if IS_MAC:
+        return ImageGrab.grab().convert("RGB")
+    return ImageGrab.grab()
+
+
 def grab(region=None):
-    im = ImageGrab.grab(all_screens=True)
+    im = _screen()
     if _is_black(im.crop((0, 120, im.width, im.height - 120))) and unblack():
-        im = ImageGrab.grab(all_screens=True)
+        im = _screen()
     return im.crop(region) if region else im
 
 
-def texts(region=None):
-    """[(text, cx, cy, (x0,y0,x1,y1), score)] in physical screen pixels."""
+def texts(region=None, upscale=1):
+    """[(text, cx, cy, (x0,y0,x1,y1), score)] in physical screen pixels. upscale=2 helps small / grey text."""
     im = grab(region)
     ox, oy = (region[0], region[1]) if region else (0, 0)
+    if upscale != 1:
+        im = im.resize((im.width * upscale, im.height * upscale))
     res, _ = ocr_engine()(np.array(im)[:, :, ::-1])
     out = []
     for b, t, s in res or []:
-        xs, ys = [p[0] for p in b], [p[1] for p in b]
+        xs, ys = [p[0] / upscale for p in b], [p[1] / upscale for p in b]
         x0, y0, x1, y1 = min(xs) + ox, min(ys) + oy, max(xs) + ox, max(ys) + oy
         out.append((t, (x0 + x1) / 2, (y0 + y1) / 2, (x0, y0, x1, y1), s))
     return out
@@ -214,7 +251,11 @@ def fx(e):
         pass
 
 
-def click(x, y, agent="Claude", label=None, wait=0.35):
+AGENT = __import__("os").environ.get("XY_AGENT", "Claude")     # name on the overlay cursor (豆包 / WorkBuddy …)
+
+
+def click(x, y, agent=None, label=None, wait=0.35):
+    agent = agent or AGENT
     fx({"type": "cursor", "agent": agent, "to": [x, y]})
     time.sleep(0.15)
     auto.Click(int(x), int(y), waitTime=wait)

@@ -18,15 +18,17 @@ from PIL import Image, ImageDraw, ImageFont
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import director  # noqa: E402  (KW_FONT = 仓耳榜黑 from the 剪映 cache)
 
-PINK, WHITE = (255, 40, 127), (255, 255, 255)
+from style import ST  # noqa: E402  (v1.1.1: cover colours + layout from style.json)
+_C = ST["cover"]
+PINK, WHITE = (tuple(int(_C[k][i:i + 2], 16) for i in (0, 2, 4)) for k in ("top_color", "bottom_color"))
 
 
 # Owner layout, MEASURED on his reference covers 「CLAUDE / 不能用了又如何」 (2026-11-18):
 #   16:9  both lines the SAME fill width = 0.575 W (≈ 77 % of the central 4:3), block centre at 0.726 H
 #   3:4   both lines the SAME fill width = 0.86 W (stroke almost touches the sides), block centre at the seam
 #   the two lines' strokes touch (fill gap ≈ 2 × stroke) — 「上下排得很紧，字放大，霸气」
-H_FILL_W, H_CENTRE = 0.575, 0.726
-V_FILL_W, V_CENTRE = 0.86, 0.47
+H_FILL_W, H_CENTRE = _C["landscape_fill_width"], _C["landscape_centre_y"]
+V_FILL_W, V_CENTRE = _C["portrait_fill_width"], _C["portrait_centre_y"]
 
 
 def font_for_width(text, target_w):

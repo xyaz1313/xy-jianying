@@ -42,7 +42,7 @@ occurrence so it never plays twice.
 - Target length: as short as the argument allows (this kind of piece: 60–90 s)
 
 ## 6. Deliver to the owner
-Write into the content note (vault: `01 Content Creation/05 Content/<date> <title>.md`, section *Script director*):
+Write into the content note (vault: `01 自媒体/05 内容作品/<date> <title>.md`, section *脚本导演* (vault is Chinese since 2026-11-18)):
 - the one-sentence point, the 2–3 hook options with why, the recommended structure as a table
   (part · source clip · source time · line), what was cut and why, new length vs old length
 - render previews with `tools/render_edl.py` (full recommended cut + one 15 s preview per hook option)

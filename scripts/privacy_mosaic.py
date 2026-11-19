@@ -14,8 +14,9 @@ import re
 import subprocess
 import sys
 
-FF = next(pathlib.Path.home().joinpath("AppData/Local/Microsoft/WinGet/Packages").rglob("ffmpeg.exe"))
-FP = FF.with_name("ffprobe.exe")
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from platform_env import FF, FFPROBE, ff_font, font as sys_font, hwaccel, venc  # noqa: E402,F401  (v1.1 cross-platform)
+FP = FFPROBE
 KEEP_WORDS = ["产品", "投入", "福利", "研究", "方法", "赚", "月入", "客户", "搞到爆", "会销", "线上", "适合",
               "好事", "主要是他", "可以教", "卖", "不用", "W", "万", "师傅", "跟进", "沟通", "名片", "加你"]
 PHONE = re.compile(r"1[3-9]\d{9}")
@@ -40,8 +41,9 @@ def ocr(video, boxes_json, sample_fps=5.0):
     from rapidocr_onnxruntime import RapidOCR
     W, H, fps, dur = probe(video)
     oh = round(H * OCR_W / W)
-    eng = RapidOCR(det_use_cuda=True, cls_use_cuda=True, rec_use_cuda=True)
-    p = subprocess.Popen([str(FF), "-hide_banner", "-loglevel", "error", "-hwaccel", "cuda", "-i", str(video),
+    import platform_env
+    eng = platform_env.ocr_engine()
+    p = subprocess.Popen([str(FF), "-hide_banner", "-loglevel", "error", *hwaccel(), "-i", str(video),
                           "-vf", f"fps={sample_fps},scale={OCR_W}:{oh}", "-f", "rawvideo", "-pix_fmt", "bgr24", "-"],
                          stdout=subprocess.PIPE)
     samples, i, sz = [], 0, OCR_W * oh * 3
@@ -82,7 +84,7 @@ def render(video, boxes_json, out, bleeps):
     S = meta["samples"]
     dt = S[1]["t"] - S[0]["t"] if len(S) > 1 else 1
     pad = int(W * 0.016)
-    dec = subprocess.Popen([str(FF), "-hide_banner", "-loglevel", "error", "-hwaccel", "cuda", "-i", str(video),
+    dec = subprocess.Popen([str(FF), "-hide_banner", "-loglevel", "error", *hwaccel(), "-i", str(video),
                             "-f", "rawvideo", "-pix_fmt", "bgr24", "-"], stdout=subprocess.PIPE)
     af = []
     for b in bleeps:  # mute the word and lay a 1 kHz beep on top
@@ -99,7 +101,7 @@ def render(video, boxes_json, out, bleeps):
     enc = subprocess.Popen([str(FF), "-hide_banner", "-loglevel", "error", "-y",
                             "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{W}x{H}", "-r", str(fps), "-i", "-",
                             "-i", str(video), "-filter_complex", fc, "-map", "0:v", "-map", "[a]",
-                            "-c:v", "hevc_nvenc", "-preset", "p6", "-tune", "hq", "-rc", "vbr", "-cq", "18", "-b:v", "0",
+                            *venc(18, "slow", hevc=True),
                             "-c:a", "aac", "-b:a", "256k", str(out)], stdin=subprocess.PIPE)
     sz, n = W * H * 3, 0
     while True:

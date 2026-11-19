@@ -23,7 +23,8 @@ from PIL import Image  # noqa: E402
 
 import jy_ui  # noqa: E402
 
-FF = next(pathlib.Path.home().joinpath("AppData/Local/Microsoft/WinGet/Packages").rglob("ffmpeg.exe"))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from platform_env import FF, FFPROBE, ff_font, font as sys_font, hwaccel, venc  # noqa: E402,F401  (v1.1 cross-platform)
 STEP_RE = re.compile(r"(?:AI\s*EDIT)?\W*0?([1-7])\s*(.{0,40})")
 
 
@@ -32,7 +33,7 @@ def main():
     every = float(sys.argv[sys.argv.index("--every") + 1]) if "--every" in sys.argv else 2.0
     (out / "thumbs").mkdir(parents=True, exist_ok=True)
     W, H = 1920, 1080
-    cmd = [str(FF), "-hide_banner", "-loglevel", "error", "-hwaccel", "cuda", "-i", video,
+    cmd = [str(FF), "-hide_banner", "-loglevel", "error", *hwaccel(), "-i", video,
            "-vf", f"fps=1/{every},scale={W}:{H}", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE)
     eng = jy_ui.ocr_engine()

@@ -25,6 +25,7 @@ import jy_ui  # noqa: E402
 import panel  # noqa: E402
 import steps  # noqa: E402
 import timeline as tl  # noqa: E402
+from style import ST  # noqa: E402
 from steps import CYAN, GREEN, PINK, PURPLE, WHITE, Pause, fx, status  # noqa: E402,F401
 
 PY = sys.executable
@@ -110,7 +111,7 @@ def main():
                        *[f"{k}={v}" for k, v in J["tx"].items()]]
             else:
                 cmd = [PY, "-X", "utf8", str(HERE / "build_final.py"), J["plan"], J["draft"], lay_p, "--files",
-                       *J["files"], "--volume-db", str(J.get("volume_db", 6))]
+                       *J["files"], "--volume-db", str(J.get("volume_db", ST["rhythm"]["voice_db"]))]
             out = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
             if out.returncode != 0:
                 raise Pause("生成草稿失败：" + out.stderr[-200:])
@@ -121,7 +122,7 @@ def main():
             # not even after going home. It must be QUIT (tray → 退出; closing the window only hides it) and started
             # again. Not running -> open_draft starts it.
             if steps.jianying_running():
-                raise Pause(f"草稿「{J['draft']}」已生成：请从右下角托盘退出剪映（不用重新打开），然后用 --from 2 继续")
+                raise Pause(f"草稿「{J['draft']}」已生成：请{steps.QUIT_HINT}（不用重新打开），然后用 --from 2 继续")
             json.dump(S, open(state_p, "w", encoding="utf-8"), ensure_ascii=False)
             step = 2
         lay = S["layout"]
@@ -180,8 +181,8 @@ def main():
         if step <= 4 and 4 in skip:
             step = 5
         if step <= 4:
-            status("04 滤镜 · 高清增强 34")
-            steps.add_filter_full("高清增强", 34, total)
+            status(f"04 滤镜 · {ST['filter']['name']} {ST['filter']['strength']}")
+            steps.add_filter_full(total=total)
             check_total(total, "加滤镜后总长变了")
             step = 5
 
@@ -191,7 +192,7 @@ def main():
         if step <= 5:
             status("05 字幕 · 一键识别")
             steps.recognize_subtitles()
-            status("05 字幕 · 新青年体 白字黑边")
+            status(f"05 字幕 · {ST['subtitle']['font']} 白字黑边")
             steps.style_subtitles(5.0)
             if J.get("builder") == "demo":          # owner rule: 导流 words may be SPOKEN, never shown
                 import compliance
@@ -261,7 +262,7 @@ def main():
                 if first:
                     steps.add_default_text_at(t)
                     steps.replace_content(red)
-                    steps.style_keyword("FF287F", steps.KW["x"], steps.KW["y_red"])
+                    steps.style_keyword(steps.KW["color"], steps.KW["x"], steps.KW["y_red"])
                     red_tpl = red
                     if white:
                         steps.clone_keyword(red_tpl, t, white, color="FFFFFF", y=steps.KW["y_white"])

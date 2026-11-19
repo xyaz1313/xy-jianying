@@ -20,8 +20,9 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
-FF = next(pathlib.Path.home().joinpath("AppData/Local/Microsoft/WinGet/Packages").rglob("ffmpeg.exe"))
-FONT = "C\\:/Windows/Fonts/msyhbd.ttc"
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from platform_env import FF, FFPROBE, ff_font, font as sys_font, hwaccel, venc  # noqa: E402,F401  (v1.1 cross-platform)
+FONT = ff_font()
 DENOISE = "highpass=f=80,afftdn=nr=14:nf=-32"
 _TX = {}
 
@@ -82,14 +83,14 @@ def render_seg(E, s, path):
         aa, ab, s["snap"] = snap_cut(E, asrc, aa, ab)
         dur = ab - aa
         speed = (b - a) / dur
-        args = ["-ss", f"{a:.3f}", "-t", f"{b - a:.3f}", "-hwaccel", "cuda", "-i", src,
+        args = ["-ss", f"{a:.3f}", "-t", f"{b - a:.3f}", *hwaccel(), "-i", src,
                 "-ss", f"{aa:.3f}", "-t", f"{dur:.3f}", "-i", E["sources"][asrc]]
         fc = (f"[0:v]setpts=(PTS-STARTPTS)/{speed:.5f},{vf}{badge(speed) if speed > 1.6 else ''}[v];"
               f"[1:a]asetpts=PTS-STARTPTS,{DENOISE},aresample=48000[a]")
     else:
         speed = s.get("speed", 1.0)
         dur = (b - a) / speed
-        args = ["-ss", f"{a:.3f}", "-t", f"{b - a:.3f}", "-hwaccel", "cuda", "-i", src,
+        args = ["-ss", f"{a:.3f}", "-t", f"{b - a:.3f}", *hwaccel(), "-i", src,
                 "-f", "lavfi", "-t", f"{dur:.3f}", "-i", "anullsrc=r=48000:cl=stereo"]
         v = f"[0:v]setpts=(PTS-STARTPTS)/{speed:.5f},{vf}{badge(speed)}[v]"
         if s.get("audio") and speed < 2:
@@ -102,7 +103,7 @@ def render_seg(E, s, path):
         else:
             fc = v + ";[1:a]anull[a]"
     cmd = [str(FF), "-hide_banner", "-loglevel", "error", "-y", *args, "-filter_complex", fc,
-           "-map", "[v]", "-map", "[a]", "-t", f"{dur:.3f}", "-c:v", "h264_nvenc", "-preset", "p4", "-cq", "26",
+           "-map", "[v]", "-map", "[a]", "-t", f"{dur:.3f}", *venc(26),
            "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "160k", "-ac", "2", str(path)]
     subprocess.run(cmd, check=True)
     return dur

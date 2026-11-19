@@ -1,12 +1,12 @@
 {
   "skill_name": "xy-jianying",
-  "notes": "Regression set. Re-run after every iteration; keep outputs in ~/.claude/skill-workspaces/xy-jianying-workspace/iteration-N/. Media for eval-1 lives in the vault: Attachments/anti-scam-job/ (originals are the owner's WeChat files listed in job_final.json).",
+  "notes": "Regression set. Re-run after every iteration; keep outputs in ~/.claude/skill-workspaces/xy-jianying-workspace/iteration-N/. Media for eval-1 lives in the vault: 附件/anti-scam-job/ (originals are the owner's WeChat files listed in job_final.json).",
   "evals": [
     {
       "id": 1,
       "eval_name": "anti-scam-three-clips",
       "prompt": "这三段口播帮我剪一下：顺序、去气口、1.1 倍速、美颜、高清增强滤镜、字幕、重点大字和光效，剪完留在草稿箱。",
-      "files": ["Attachments/anti-scam-job/job_final.json", "Attachments/anti-scam-job/edl_v2.json", "Attachments/anti-scam-job/visual_spec.json"],
+      "files": ["附件/anti-scam-job/job_final.json", "附件/anti-scam-job/edl_v2.json", "附件/anti-scam-job/visual_spec.json"],
       "expected_output": "Clip order 开场 → 证据 → 收尾; privacy mosaic + one bleep; hook-first cut ≈1:25; three owner checkpoints offered before 剪映; draft in the draft box, not exported.",
       "assertions": [
         {"text": "clip order detected as e5b8 → bde5 → f41d", "type": "programmatic"},

@@ -9,7 +9,8 @@ _done = False
 
 def setup():
     global _done
-    if _done:
+    if _done or os.name != "nt":          # only Windows needs the DLL search path
+        _done = True
         return
     for base in site.getsitepackages() + [site.getusersitepackages()]:
         nv = pathlib.Path(base) / "nvidia"

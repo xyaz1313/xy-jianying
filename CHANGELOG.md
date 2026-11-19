@@ -3,6 +3,90 @@
 Each iteration: what changed, why (owner feedback / failure seen), how it was verified. Newest first.
 Backlog at the bottom. Any agent working on this skill appends here.
 
+## v1.1.1 — 2026-11-19 · Mac 实测后：一套代码不写死坐标 + 改数值读回核对 + 一条命令验收
+**Why** — the owner's Mac test (MacBook Air, macOS 27.2, 剪映 11.8, run by 豆包 for ~12 h): install / doctor / draft /
+live smoke passed, but every "type a value" action failed and many regions missed: the live layer had Windows-150 %
+pixel bands and a teal-highlight focus check baked in. 豆包's own patches swapped in Mac numbers and loosened checks
+(skip on failure, 6-frame tolerance) — kept its findings, not those patches.
+**What**
+- `panel.py` — no fixed coordinates: `S(v)` scales every offset measured on Windows 150 % to this screen, `Y(v)` moves a
+  window-relative y to this window, `topband()` = the 素材 / 文本 / 滤镜 icon row found by OCR, `tab_rows()` finds the
+  property panel's tab rows by OCR (no 90 / 220 px bands), `label_column()` widened for Mac.
+- `panel.type_value()` — the one way to enter a value: click / double-click / defocus+click; Windows still types only
+  when the box shows its teal focus (unchanged behaviour), Mac selects all (⌘A) and types; **every value is read back**
+  (number rows, Hex box, text content, position X/Y, custom vocabulary) and a mismatch stops the run.
+- `steps.py` — all regions via S()/Y()/topband(); `pick_font` defocuses first, checks the list really opened, uses
+  收藏 then the list's search box, still stops if the font is missing; beauty preset name from `config.json`
+  `beauty_preset` (Mac has no 「我的预设1」 until the owner saves one) with a clear stop; `stroke_width` opens a collapsed
+  描边 section; subtitle clip picking tries the nearest 5 hits; `add_default_text_at` reuses an existing 「默认文本」
+  (re-runs added duplicates); `open_draft` retries on a 2x-upscaled screenshot (black-cover cards); Mac `in_editor`
+  looks for editor-only words, Mac `go_home` falls back to ⌘W; filter purple test excludes magenta.
+- `timeline.py` — `layout()` calibrates itself; ruler fit self-check (0 s must lie in the timeline); `seek(0)` = Home +
+  read-back (the filter landed late on Mac); still frame-exact (no loosened tolerance).
+- `osctl.py` (from the Mac test) — ignore 剪映 helper / tray processes; prefer on-screen windows; activate via
+  NSRunningApplication (follows full-screen Spaces); refuse a 剪映 window on a secondary display; clamp clicks to the
+  main display; Mac key events 60 ms apart (repeated arrows were swallowed). `overlay.py` — joins all Spaces only on a
+  single display (multi-display drew one copy per screen). `platform_env` — Mac prefers Homebrew `ffmpeg-full`
+  (plain ffmpeg lacks drawtext). `install.sh` — `${VAR}` before Chinese text (bash 3.2 "unbound variable"), installs
+  ffmpeg-full; `run.sh` — `tests/x.py` resolves under scripts/. `doctor` — 输入监控 is required for ⌃⌥F12.
+- **`style.json` (new)** — owner: the skill is open source, every value we tuned must be in the package so users can
+  change it and 豆包 knows what to check. All style values in one commented file: rhythm (1.10x, pauses ≥0.35 s keep
+  0.12 s, +6 dB), beauty preset + its values + the read-back check (磨皮 23), filter 高清增强 34, subtitles (hotwords,
+  新青年体 6, preset 2, white, stroke 70), keyword (仓耳榜黑 13 / 14, stroke 90, mood colours + entrance animations, default
+  position), BGM (22 22, -6.3 dB, no fade), cover layout, export. `scripts/style.py` loads it (built-in defaults if it is
+  missing / broken; legacy config.json font / preset keys still override); steps / live_run / visual_director / director /
+  cover_render / script_director read it; doctor checks it; the acceptance test prints and saves the values it used.
+- **Main screen only (owner, 2026-11-19 — he works on a vertical extended screen next to the main one):** the first
+  Windows acceptance run found 剪映 on the extended screen (x = −1956) and stopped at step 1 ("home page black": the
+  all-screens screenshot's origin moved, every crop was off). Now `jy_ui.win()` moves 剪映 onto the main screen first
+  (Windows SetWindowPos, Mac maximise onto the main display — Finder's desktop bounds spanned all screens),
+  screenshots are main-screen only, every click / drag / move off the main screen raises (Mac no longer clamps),
+  and the overlay hides itself when 剪映 is not on the main screen.
+- `scripts/tests/acceptance.py` — ONE command runs all 11 live actions on its own draft 「XY验收」, reads each back,
+  records ✓/✗ with a screenshot and a full-window OCR dump per failure, zips the result to the Desktop.
+- `MAC-TEST.md` rewritten: 豆包 runs 3 commands and must not edit any file.
+- Found by the Windows acceptance runs (2026-11-19): **filter** — the owner's video has purple lights; scattered purple
+  pixels in the main track's thumbnails were taken for a filter clip, so no filter was added and the MAIN clip was
+  dragged (then undone). `_purple_row` now looks only above the main track and needs a solid purple run; a filter that
+  already spans 0 s → end is not dragged again (grabbing a long clip's middle moves it) and is selected before setting
+  强度; a no-op drag is never undone (that undid ADDING the filter). **Beauty** — reading 磨皮 first scrolled the panel
+  so 「美颜预设」 was out of view: scroll to the top before opening the presets.
+**Verified** — Windows (RTX, 4K 150 %, extended vertical screen attached): `tests/acceptance.py` on 「XY验收」 with the
+owner's 14 s talking-head clip: **11 / 11 ✓** (4.4 min): open · overlay · geometry · seek 150 · split+undo · beauty
+「我的预设1」 (磨皮 23 read back) · filter 高清增强 0→14.1 s + 34 · auto subtitles + 新青年体 / 6 / white / stroke 70 · keyword
+(add, replace text, 仓耳榜黑, 13, FFE600, X/Y, stroke 90, 打字机I) · clone (white) · home. Mac: pending owner run.
+
+## v1.1.0 — 2026-11-18 · cross-platform：Windows（有 / 无 N 卡）· macOS（苹果芯片）· Linux（仅导演）
+**Why** — owner: many people have no NVIDIA card or use a Mac; the skill must install and run right away everywhere,
+light overlay included, and the standard test runner is 豆包 / WorkBuddy (free for most people), not Claude.
+**What**
+- `scripts/platform_env.py` — one place that picks the backend: OS, GPU (nvidia / apple / amd / intel / cpu, probed by
+  real 0.5 s ffmpeg encodes, cached in `.cache/backend.json`), `FF` (PATH / WinGet / Homebrew), `hwaccel()`, `venc(q)`
+  (NVENC / VideoToolbox / AMF / QSV / x264), `whisper_cfg()` (CUDA fp16 / mlx Metal / CPU int8 + large-v3-turbo),
+  `ocr_engine()` (CUDA or CPU), system CJK font, 剪映 data / drafts / cloud-font dirs on Win + Mac, `tier()`.
+  `XY_BACKEND=cpu|amd|…` forces a path for testing. All 10 render scripts and transcribe.py use it — no more
+  hard-coded cuda / nvenc / C:\Windows\Fonts / WinGet paths.
+- `scripts/osctl.py` — same small API (Click, DragDrop, SendKeys, Wheel, clipboard, WindowControl, maximise…) on
+  Windows (uiautomation) and macOS (Quartz events + AppleScript; Retina pixel→point conversion; {Ctrl} → ⌘).
+  jy_ui / steps / panel / timeline / overlay use it.
+- Mac has no UIA tree → OCR fallbacks: `panel._player_by_ocr` (「播放器…」 title, right-panel tabs, timecode readout),
+  in_editor, go_home. Simulated on Windows with UIA disabled: player rect within 11 px of UIA; timeline + ruler identical.
+- Overlay on Mac: Qt tool window kept visible (WA_MacAlwaysShowToolWindow), ⌃⌥F12 via pynput, POST /hide /show.
+- `scripts/doctor.py` — 体检 + 档位 + real tests (`--full`: encode, decode, drawtext, OCR, spoken-sample
+  transcription, overlay start/quit; `--ui`: read-only 剪映 UI probe) → `doctor-report/<time>/report.md`.
+- `install.sh` + `run.sh` (Mac / Linux: Homebrew python@3.12 + ffmpeg + git, own `.venv`, draft library pinned
+  881edd2, links into agent skill dirs, runs doctor). `install.ps1`: CUDA wheels only with an NVIDIA card, clones the
+  draft library, runs doctor. `requirements.txt` with platform markers. `config.example.json` fixed (the
+  `"D:\视频成品"` value was invalid JSON) — empty values = per-OS defaults (Mac export root `~/Movies/视频成品`).
+- `scripts/tests/overlay_demo.py`, `draft_smoke.py` (test draft 「XY测试」), `live_smoke.py` (open → OCR layout →
+  seek → split → undo); `MAC-TEST.md` (owner steps + copy-paste prompt for 豆包 + T1–T7 with pass criteria).
+- Overlay cursor name from `XY_AGENT` (豆包 / WorkBuddy …).
+**How verified (Windows, this PC)** — doctor `--full` ✓ on NVIDIA (encode 0.8 s, OCR 1.8 s, 2-min speech 4 s) and
+with `XY_BACKEND=amd` (real AMD iGPU AMF encode 1.0 s, CPU OCR 0.9 s, CPU whisper turbo 2-min speech 16 s);
+doctor `--ui` ✓ on a real draft; overlay safety 3/3; overlay_demo ✓; draft_smoke build ✓; all modules import.
+**Not verified yet** — everything Mac (needs the owner's M5 run of MAC-TEST.md); live_smoke on Windows (owner's own
+draft was open); Linux.
+
 ## v1.0.0 — 2026-11-18 · first release as **xy-jianying**（剪映自动剪辑）｜小爷出品
 **Why** — the owner decided to publish the editing skill on its own (not inside XYSkill), usable by any agent,
 non-commercial, following his XYSkill conventions and the Anthropic Agent Skills standard.

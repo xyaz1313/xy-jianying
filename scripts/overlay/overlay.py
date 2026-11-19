@@ -7,7 +7,8 @@ Agents send events with HTTP POST to http://127.0.0.1:8790/event (JSON body, see
 Coordinates are PHYSICAL screen pixels (what UI Automation reports); the overlay converts them.
 
 Run:  python overlay.py [--parent PID]   (follows the 剪映 window ONLY - never covers the whole screen)
-Stop: POST /quit, global hotkey Ctrl+Alt+F12 (emergency), or automatically (SAFETY below).
+Stop: POST /quit, global hotkey Ctrl+Alt+F12 (Mac: ⌃⌥F12, laptop keyboards fn+⌃⌥F12), or automatically.
+v1.1: runs on Windows AND macOS (window lookup / process checks via scripts/osctl.py). POST /hide, /show too.
 
 SAFETY (v0.7, after the owner's PC was locked behind a black always-on-top overlay after every run):
   the overlay quits by itself when
@@ -16,7 +17,7 @@ SAFETY (v0.7, after the owner's PC was locked behind a black always-on-top overl
   - the 剪映 window is gone or minimised for 3 s (it used to fall back to covering the whole primary screen)
   - the owner presses Ctrl+Alt+F12 (global hotkey; works even when the overlay is black and nothing else reacts)
 """
-import ctypes
+import ctypes  # Windows hotkey hook only
 import os
 import json
 import pathlib
@@ -37,15 +38,16 @@ IDLE_QUIT = 15 * 60          # seconds without any event -> quit
 # 剪映 warned about the conflict (2026-11-18)
 HOTKEYS = ((0x0001 | 0x0002, 0x7B), (0x0001 | 0x0002 | 0x0004, 0x7B))
 HERE = pathlib.Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent))
+import osctl  # noqa: E402
 
 
 def jianying_rect():
     """Physical-pixel rect (left, top, right, bottom) of the main 剪映 window, or None."""
     try:
-        import uiautomation as auto
-        w = auto.WindowControl(searchDepth=1, Name="剪映专业版")
+        w = osctl.WindowControl(searchDepth=1, Name="剪映专业版")
         if w.Exists(0, 0):
-            if ctypes.windll.user32.IsIconic(w.NativeWindowHandle):
+            if osctl.is_minimised(w):
                 return None
             r = w.BoundingRectangle
             if r.right - r.left < 200 or r.left <= -30000:
@@ -58,14 +60,24 @@ def jianying_rect():
 
 def alive(pid):
     """True while process pid is running."""
-    k = ctypes.windll.kernel32
-    h = k.OpenProcess(0x1000, False, pid)          # PROCESS_QUERY_LIMITED_INFORMATION
-    if not h:
-        return False
-    code = ctypes.c_ulong()
-    ok = k.GetExitCodeProcess(h, ctypes.byref(code))
-    k.CloseHandle(h)
-    return bool(ok) and code.value == 259          # STILL_ACTIVE
+    return osctl.pid_alive(pid)
+
+
+def hotkey_thread_mac(bridge):
+    """Mac emergency hotkey ⌃⌥F12 via pynput (needs Input Monitoring permission for the app running Python).
+    If the permission is missing, the other safety exits still apply (parent exit / idle / 剪映 gone) and
+    ⌘⌥Esc → force-quit Python always works."""
+    try:
+        from pynput import keyboard
+    except Exception:
+        print("emergency hotkey: pynput missing (pip install pynput) — use ⌘⌥Esc → Python", flush=True)
+        return
+    try:
+        with keyboard.GlobalHotKeys({"<ctrl>+<alt>+<f12>": bridge.quit.emit}) as h:
+            print("emergency hotkey: ⌃⌥F12", flush=True)
+            h.join()
+    except Exception as e:
+        print("emergency hotkey FAILED:", e, flush=True)
 
 
 def hotkey_thread(bridge):
@@ -113,6 +125,7 @@ def hotkey_thread(bridge):
 class Bridge(QObject):
     event = Signal(str)
     quit = Signal()
+    visible = Signal(bool)
 
 
 class Overlay(QWebEngineView):
@@ -123,15 +136,53 @@ class Overlay(QWebEngineView):
                             | Qt.WindowTransparentForInput | Qt.WindowDoesNotAcceptFocus)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_ShowWithoutActivating)
+        if osctl.IS_MAC:
+            # a Qt.Tool window is an NSPanel that HIDES when its app is inactive — the overlay is never active
+            self.setAttribute(Qt.WA_MacAlwaysShowToolWindow, True)
+            # 剪映常被放成独立全屏 Space；不设这个，浮层只会留在自己的那个桌面（看着"画在桌面上"）
+            QTimer.singleShot(400, self._mac_join_all_spaces)
         self.page().setBackgroundColor(QColor(0, 0, 0, 0))
         self.settings().setAttribute(QWebEngineSettings.ShowScrollBars, False)
         self.load(QUrl.fromLocalFile(str(HERE / "overlay.html")))
         self.origin = (0, 0)
         bridge.event.connect(self.push)
         bridge.quit.connect(QApplication.quit)
+        bridge.visible.connect(self.set_shown)
+        self.hidden_by_cmd = False
         self.follow()
         self.timer = QTimer(self, interval=1000, timeout=self.follow)
         self.timer.start()
+
+    def _mac_join_all_spaces(self):
+        """Mac 上给浮层窗口设 collection behavior。
+
+        两条实测教训：
+        1) 加 CanJoinAllSpaces 后，**每块显示器都会各画一份**（外接屏也被铺满，用户以为 AI 跑到副屏乱画）；
+        2) 但剪映若停在自己的全屏 Space，不加它就是"浮层画在桌面上、不盖剪映"。
+        所以：**只有单屏时**才允许跨 Space（此时不会跑到别的屏），多屏一律老实待在自己那块屏。
+        """
+        try:
+            from AppKit import (NSApp, NSWindowCollectionBehaviorStationary,
+                                NSWindowCollectionBehaviorCanJoinAllSpaces,
+                                NSWindowCollectionBehaviorFullScreenAuxiliary)
+            from Quartz import (CGWindowLevelForKey, kCGScreenSaverWindowLevelKey,
+                                CGGetActiveDisplayList, kCGNullDirectDisplay)
+            ndisp = len(CGGetActiveDisplayList(64, None, None)[1])
+            wid = int(self.winId())
+            beh = NSWindowCollectionBehaviorStationary
+            if ndisp <= 1:
+                beh |= NSWindowCollectionBehaviorCanJoinAllSpaces | NSWindowCollectionBehaviorFullScreenAuxiliary
+            for w in NSApp.windows():
+                if w.windowNumber() == wid:
+                    w.setCollectionBehavior_(beh)
+                    w.setLevel_(CGWindowLevelForKey(kCGScreenSaverWindowLevelKey))
+            print(f"mac: overlay behavior set (screens={ndisp}, join_all_spaces={ndisp <= 1})", flush=True)
+        except Exception as e:
+            print("mac: overlay behavior failed:", e, flush=True)
+
+    def set_shown(self, on):
+        self.hidden_by_cmd = not on
+        self.show() if on else self.hide()
 
     def follow(self):
         # safety: never outlive the run, never cover the screen without 剪映 under it
@@ -152,9 +203,19 @@ class Overlay(QWebEngineView):
                 QApplication.quit()
             return
         self.missing = 0
+        # v1.1.1: the main screen only — never draw on an extended screen (the owner works there)
+        g = QGuiApplication.primaryScreen().geometry()
+        cx, cy = (r[0] + r[2]) / 2 / dpr, (r[1] + r[3]) / 2 / dpr
+        if not (g.left() <= cx <= g.right() and g.top() <= cy <= g.bottom()):
+            if self.isVisible():
+                print("剪映 is not on the main screen -> overlay hidden", flush=True)
+                self.hide()
+            return
         if r[:2] != self.origin or not self.isVisible():
             self.origin = r[:2]
         self.setGeometry(int(r[0] / dpr), int(r[1] / dpr), int((r[2] - r[0]) / dpr), int((r[3] - r[1]) / dpr))
+        if self.hidden_by_cmd:
+            return
         if not self.isVisible():
             self.show()
         self.raise_()
@@ -178,6 +239,8 @@ def serve(bridge: Bridge):
             body = self.rfile.read(int(self.headers.get("Content-Length", 0))).decode("utf-8")
             if self.path == "/quit":
                 bridge.quit.emit()
+            elif self.path in ("/hide", "/show"):
+                bridge.visible.emit(self.path == "/show")
             else:
                 for line in body.splitlines() or [body]:
                     if line.strip():
@@ -195,16 +258,13 @@ def serve(bridge: Bridge):
 
 
 if __name__ == "__main__":
-    try:
-        ctypes.windll.shcore.SetProcessDpiAwareness(2)
-    except Exception:
-        pass
+    osctl.dpi_aware()
     app = QApplication(sys.argv)
     bridge = Bridge()
     ppid = int(sys.argv[sys.argv.index("--parent") + 1]) if "--parent" in sys.argv else None
     ov = Overlay(bridge, ppid)
     threading.Thread(target=serve, args=(bridge,), daemon=True).start()
-    threading.Thread(target=hotkey_thread, args=(bridge,), daemon=True).start()
+    threading.Thread(target=hotkey_thread if osctl.IS_WIN else hotkey_thread_mac, args=(bridge,), daemon=True).start()
     print(f"overlay listening on http://127.0.0.1:{PORT}", flush=True)
     code = app.exec()
     os._exit(code)          # also ends the HTTP / hotkey threads and QtWebEngine children

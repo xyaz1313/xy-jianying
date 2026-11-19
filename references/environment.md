@@ -98,3 +98,16 @@ python adu-motion-video/scripts/pipeline.py doctor
 - 第 4 课：B 模式 + 实时光效：AI 当着镜头在剪映里剪片
 - 第 5 课：阿杜模板做包装动效
 - 第 6 课：踩坑合集（上面的 Known pitfalls）
+
+## v1.1 跨平台（2026-11-18）
+| 档位 | 机器 | 后端（`scripts/platform_env.py` 自动选，`doctor.py` 报告） | 实测 |
+|---|---|---|---|
+| 满配 | Windows + NVIDIA | faster-whisper large-v3 CUDA fp16 · NVENC/NVDEC · OCR CUDA | RTX 5070 Ti：2 分钟口播 4 s；10 s 1080p 编码 0.8 s |
+| 标准 | Windows 无 N 卡 | faster-whisper large-v3-turbo CPU int8 · AMF（AMD）/ QSV（Intel）/ libx264 · OCR CPU | Ryzen 7 9800X3D + AMD 核显（`XY_BACKEND=amd`）：2 分钟口播 16 s；编码 1.0 s；OCR 0.9 s |
+| Mac | macOS 13+ 苹果芯片 | mlx-whisper large-v3-turbo（Metal）· VideoToolbox · OCR CPU · Quartz 点击 / 键盘（`scripts/osctl.py`）· 光效层 PySide6 | 待 M5 实测（`MAC-TEST.md`） |
+| 仅导演 | Linux / 没装剪映 | CPU / CUDA；剪映步骤跳过 | — |
+
+- Mac 没有 Windows 的 UI 自动化树：播放器 / 时间线全部靠 OCR 定位（`panel._player_by_ocr`）。在 Windows 上关掉 UIA 模拟过：和 UIA 结果相差 ≤ 11 px，时间线、时间尺校准完全一致。
+- Mac 权限：辅助功能（点击 / 打字）、屏幕与系统录音（截图）、输入监控（紧急热键 ⌃⌥F12，可选）。
+- Mac 安装用自带 `.venv`（Homebrew 的 Python 不让 pip 装到系统里），所有脚本经 `bash run.sh <脚本>` 运行。
+- 强制走慢路径测试：`XY_BACKEND=cpu|amd|intel|apple|nvidia`；换模型：`XY_WHISPER_MODEL=large-v3`。
